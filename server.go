@@ -2,7 +2,10 @@ package gemini
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -29,7 +32,16 @@ func (f HandlerFunc) ServeGemini(w ResponseWriter, r *Request) {
 // Request from the client. A Gemini request contains only the
 // URL.
 type Request struct {
-	URL *url.URL
+	URL  *url.URL
+	User *User
+}
+
+// User information provided to the server.
+type User struct {
+	// ID is the hex-encoded SHA256 hash of the key.
+	ID string
+	// Key is the user public key in PKIX, ASN.1 DER form.
+	Key string
 }
 
 // ResponseWriter used by handlers to send a response to the client.
@@ -64,9 +76,8 @@ const (
 )
 
 // NewServer creates a new Gemini server.
-// addr is in the form "<optional_ip>:<port>", e.g. ":1965". If left empty, it will efault to ":1965".
+// addr is in the form "<optional_ip>:<port>", e.g. ":1965". If left empty, it will default to ":1965".
 // cert is the X509 keypair. This can be generated using openssl:
-//   openssl genrsa -out server.key 2048
 //   openssl ecparam -genkey -name secp384r1 -out server.key
 //   openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
 // cert can be loaded using tls.LoadX509KeyPair(certFile, keyFile).
@@ -121,11 +132,13 @@ func (srv *Server) ListenAndServe() error {
 var ErrServerClosed = errors.New("gemini: server closed")
 
 func (srv *Server) serveTLS(l net.Listener) (err error) {
+	certificates := []tls.Certificate{srv.KeyPair}
 	config := &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: make([]tls.Certificate, 1),
+		MinVersion:         tls.VersionTLS13,
+		Certificates:       certificates,
+		ClientAuth:         tls.RequestClientCert,
+		InsecureSkipVerify: true,
 	}
-	config.Certificates[0] = srv.KeyPair
 	if err != nil {
 		return err
 	}
@@ -156,17 +169,35 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 		srv.logf("gemini: failed TLS handshake from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
-	srv.handle(tlsConn)
+	var user *User
+	peerCerts := tlsConn.ConnectionState().PeerCertificates
+	if len(peerCerts) > 0 {
+		pk, err := x509.MarshalPKIXPublicKey(peerCerts[0])
+		if err != nil {
+			srv.logf("gemini: failed to marshal public key: %v", err)
+			return
+		}
+		user = &User{
+			ID:  hex.EncodeToString(sha256.New().Sum(pk)),
+			Key: string(pk),
+		}
+	}
+	srv.handle(user, tlsConn)
 }
 
 // while this function could be inlined, exposing it makes it easier to test in isolation.
-func (srv *Server) handle(rw io.ReadWriter) {
+func (srv *Server) handle(user *User, rw io.ReadWriter) {
 	start := time.Now()
-	r, ok := srv.parseRequest(rw)
+	r, ok, err := srv.parseRequest(rw)
+	if err != nil {
+		srv.logf("gemini: failed to parse request: %v", err)
+		return
+	}
 	if !ok {
 		srv.logf("gemini: could not parse request")
 		return
 	}
+	r.User = user
 	w := &geminiWriter{w: rw}
 	defer func() {
 		if p := recover(); p != nil {
@@ -182,7 +213,7 @@ func (srv *Server) handle(rw io.ReadWriter) {
 	srv.logf("gemini: %v response: %v time: %v", r.URL.String(), w.code, time.Now().Sub(start))
 }
 
-func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool) {
+func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err error) {
 	request, ok, err := readUntilCrLf(rw, 1026)
 	if err != nil && err != io.EOF {
 		writeHeaderToWriter(CodeBadRequest, fmt.Sprintf("error reading request: %v", err), rw)
@@ -203,7 +234,7 @@ func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool) {
 	r = &Request{
 		URL: url,
 	}
-	return r, true
+	return r, true, err
 }
 
 type geminiWriter struct {

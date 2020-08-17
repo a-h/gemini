@@ -164,10 +164,10 @@ func TestServer(t *testing.T) {
 			s := &Server{
 				Handler: HandlerFunc(tt.handler),
 			}
-			s.handle(rec)
+			s.handle(nil, rec)
 
 			response := &Response{
-				r: bytes.NewBuffer(rec.written.Bytes()),
+				r: ioutil.NopCloser(bytes.NewBuffer(rec.written.Bytes())),
 			}
 
 			actualCode, actualMeta, err := response.Header()
