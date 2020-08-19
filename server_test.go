@@ -12,6 +12,7 @@ func TestServer(t *testing.T) {
 	var tests = []struct {
 		name              string
 		request           string
+		cert              Certificate
 		handler           func(w ResponseWriter, r *Request)
 		expectedCode      Code
 		expectedMeta      string
@@ -20,140 +21,156 @@ func TestServer(t *testing.T) {
 		expectedBodyErr   error
 	}{
 		{
-			"invalid request URLs return a CodeBadRequest",
-			"tab	is	invalid\r\n",
-			func(w ResponseWriter, r *Request) {
+			name: "invalid request URLs return a CodeBadRequest",
+			request: "tab	is	invalid\r\n",
+			cert: Certificate{},
+			handler: func(w ResponseWriter, r *Request) {
 			},
-			CodeBadRequest,
-			"request malformed",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeBadRequest,
+			expectedMeta:      "request malformed",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"very long requests return a CodeBadRequest",
-			longString("a", 2048) + "\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "very long requests return a CodeBadRequest",
+			request: longString("a", 2048) + "\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 			},
-			CodeBadRequest,
-			"request too long or malformed",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeBadRequest,
+			expectedMeta:      "request too long or malformed",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"successful handlers are sent",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "successful handlers are sent",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.SetHeader(CodeInput, "What's your name?")
 			},
-			CodeInput,
-			"What's your name?",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeInput,
+			expectedMeta:      "What's your name?",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"the header can only be set once",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "the header can only be set once",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.SetHeader(CodeInput, "What's your name?")
 				w.SetHeader(CodeClientCertificateRequired, "nope")
 			},
-			CodeInput,
-			"What's your name?",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeInput,
+			expectedMeta:      "What's your name?",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"a body can be sent if the code is success",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "a body can be sent if the code is success",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.SetHeader(CodeSuccess, "application/json")
 				w.Write([]byte(`{ "key": "value" }`))
 			},
-			CodeSuccess,
-			"application/json",
-			nil,
-			[]byte(`{ "key": "value" }`),
-			nil,
+			expectedCode:      CodeSuccess,
+			expectedMeta:      "application/json",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte(`{ "key": "value" }`),
+			expectedBodyErr:   nil,
 		},
 		{
-			"the default header is set if one isn't provided",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "the default header is set if one isn't provided",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.Write([]byte("# Hello World!"))
 			},
-			CodeSuccess,
-			"text/gemini; charset=utf-8",
-			nil,
-			[]byte("# Hello World!"),
-			nil,
+			expectedCode:      CodeSuccess,
+			expectedMeta:      "text/gemini; charset=utf-8",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte("# Hello World!"),
+			expectedBodyErr:   nil,
 		},
 		{
-			"a body isn't written if the code is not success",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "a body isn't written if the code is not success",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.SetHeader(CodeCGIError, "oops")
 				w.Write([]byte("# Hello World!"))
 			},
-			CodeCGIError,
-			"oops",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeCGIError,
+			expectedMeta:      "oops",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"metadata is truncated down to the max size",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "metadata is truncated down to the max size",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				w.SetHeader(CodeCGIError, longString("a", 2048))
 			},
-			CodeCGIError,
-			longString("a", 1024),
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeCGIError,
+			expectedMeta:      longString("a", 1024),
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"handlers receive the URL",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "handlers receive the URL",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				if r.URL.String() != "gemini://sensible" {
 					t.Errorf("expected url, got: %v", r.URL.String())
 				}
 				w.Write([]byte("OK"))
 			},
-			CodeSuccess,
-			"text/gemini; charset=utf-8",
-			nil,
-			[]byte("OK"),
-			nil,
+			expectedCode:      CodeSuccess,
+			expectedMeta:      "text/gemini; charset=utf-8",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte("OK"),
+			expectedBodyErr:   nil,
 		},
 		{
-			"handlers that forget a response are given a default",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "handlers that forget a response are given a default",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				// Do nothing.
 			},
-			CodeCGIError,
-			"empty response",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeCGIError,
+			expectedMeta:      "empty response",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 		{
-			"panics in handlers return a GCI error",
-			"gemini://sensible\r\n",
-			func(w ResponseWriter, r *Request) {
+			name:    "panics in handlers return a GCI error",
+			request: "gemini://sensible\r\n",
+			handler: func(w ResponseWriter, r *Request) {
 				panic("oops")
 			},
-			CodeCGIError,
-			"internal error",
-			nil,
-			[]byte{},
-			nil,
+			expectedCode:      CodeCGIError,
+			expectedMeta:      "internal error",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
+		},
+		{
+			name:    "invalid certificates result in a code 62 (certificate not valid response)",
+			request: "gemini://sensible\r\n",
+			cert: Certificate{
+				Error: "certificate failure",
+			},
+			handler: func(w ResponseWriter, r *Request) {
+				w.Write([]byte("Hello"))
+			},
+			expectedCode:      CodeClientCertificateNotValid,
+			expectedMeta:      "certificate failure",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
 		},
 	}
 	for _, tt := range tests {
@@ -164,7 +181,7 @@ func TestServer(t *testing.T) {
 			s := &Server{
 				Handler: HandlerFunc(tt.handler),
 			}
-			s.handle(Certificate{}, rec)
+			s.handle(tt.cert, rec)
 
 			response, err := NewResponse(ioutil.NopCloser(bytes.NewBuffer(rec.written.Bytes())))
 			if err != tt.expectedHeaderErr {

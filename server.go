@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -44,6 +43,8 @@ type Certificate struct {
 	ID string
 	// Key is the user public key in PKIX, ASN.1 DER form.
 	Key string
+	// Error is an error message related to any failures in handling the client certificate.
+	Error string
 }
 
 // ResponseWriter used by handlers to send a response to the client.
@@ -174,14 +175,16 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 	var certificate Certificate
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
 	if len(peerCerts) > 0 {
-		pk, err := x509.MarshalPKIXPublicKey(peerCerts[0])
-		if err != nil {
-			srv.logf("gemini: failed to marshal public key: %v", err)
-			return
+		now := time.Now()
+		cert := peerCerts[0]
+		certificate.ID = hex.EncodeToString(sha256.New().Sum(cert.Raw))
+		certificate.Key = string(cert.Raw)
+		if now.Before(cert.NotBefore) {
+			certificate.Error = "certificate not yet valid"
 		}
-		certificate.ID = hex.EncodeToString(sha256.New().Sum(pk))
-		certificate.Key = string(pk)
-
+		if now.After(cert.NotAfter) {
+			certificate.Error = "certificate expired"
+		}
 	}
 	srv.handle(certificate, tlsConn)
 }
@@ -207,6 +210,10 @@ func (srv *Server) handle(certificate Certificate, rw io.ReadWriter) {
 			w.SetHeader(CodeCGIError, "internal error")
 		}
 	}()
+	if certificate.Error != "" {
+		w.SetHeader(CodeClientCertificateNotValid, certificate.Error)
+		return
+	}
 	srv.Handler.ServeGemini(w, r)
 	if w.Code == "" {
 		srv.logf("gemini: handler for %q resulted in empty response, sending empty document", r.URL.Path)
