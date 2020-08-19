@@ -17,7 +17,7 @@ type Mux struct {
 func NewMux() *Mux {
 	return &Mux{
 		RouteHandlers:   make([]*RouteHandler, 0),
-		NotFoundHandler: DefaultNotFoundHandler,
+		NotFoundHandler: gemini.NotFoundHandler(),
 	}
 }
 
@@ -29,11 +29,6 @@ func (m *Mux) AddRoute(pattern string, handler gemini.Handler) {
 	}
 	m.RouteHandlers = append(m.RouteHandlers, rh)
 }
-
-// DefaultNotFoundHandler is the default handler for requests to invalid routes.
-var DefaultNotFoundHandler = gemini.HandlerFunc(func(w gemini.ResponseWriter, r *gemini.Request) {
-	w.SetHeader(gemini.CodeNotFound, "")
-})
 
 // RouteHandler is the Handler to use for a given Route.
 type RouteHandler struct {
