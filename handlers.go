@@ -47,3 +47,29 @@ func StripPrefixHandler(prefix string, h Handler) Handler {
 		NotFound(w, r)
 	})
 }
+
+// RequireCertificateHandler returns a handler that enforces authentication on h.
+// authoriser can be set to limit which users can access h. If authoriser
+// is nil, authoriser is set to AuthoriserAllowAll which allows any authenticated
+// user to access the handler.
+func RequireCertificateHandler(h Handler, authoriser func(certID, certKey string) bool) Handler {
+	if authoriser == nil {
+		authoriser = AuthoriserAllowAll
+	}
+	return HandlerFunc(func(w ResponseWriter, r *Request) {
+		if r.Certificate.ID == "" {
+			w.SetHeader(CodeClientCertificateRequired, "")
+			return
+		}
+		if !authoriser(r.Certificate.ID, r.Certificate.Key) {
+			w.SetHeader(CodeClientCertificateNotAuthorised, "")
+			return
+		}
+		h.ServeGemini(w, r)
+	})
+}
+
+// AuthoriserAllowAll allows any authenticated user to access the handler.
+func AuthoriserAllowAll(id, key string) bool {
+	return true
+}
