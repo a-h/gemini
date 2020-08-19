@@ -40,12 +40,11 @@ func main() {
 	if !ok {
 		log.Fatalf("It should have worked with the certificate added, but got ok %v", ok)
 	}
-	code, meta, err := r.Header()
 	fmt.Println("Authenticated:", authenticated)
-	fmt.Println("Code:", code)
-	fmt.Println("Meta:", meta)
+	fmt.Println("Code:", r.Header.Code)
+	fmt.Println("Meta:", r.Header.Meta)
 	fmt.Println("")
-	body, err := ioutil.ReadAll(r.Body())
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Fatalf("failed to read body: %v", err)
 	}

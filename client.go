@@ -1,12 +1,14 @@
 package gemini
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"strings"
 	"time"
@@ -14,18 +16,23 @@ import (
 
 // Response from the Gemini server.
 type Response struct {
-	headerRead bool
-	code       Code
-	meta       string
-	r          io.ReadCloser
+	Header *Header
+	Body   io.ReadCloser
 }
 
-// Body of the response.
-func (r *Response) Body() io.ReadCloser {
-	if !r.headerRead {
-		r.Header()
+// NewResponse parses the server response.
+func NewResponse(r io.ReadCloser) (resp *Response, err error) {
+	resp = &Response{
+		Body: r,
 	}
-	return r.r
+	h, err := readHeader(r)
+	resp.Header = &h
+	return
+}
+
+type Header struct {
+	Code Code
+	Meta string
 }
 
 // ErrInvalidStatus is returned if the Gemini request did not match the expected format.
@@ -40,13 +47,9 @@ var ErrInvalidMeta = errors.New("gemini: invalid meta")
 // ErrCrLfNotFoundWithinMaxLength is returned if the Gemini server returns an invalid response.
 var ErrCrLfNotFoundWithinMaxLength = errors.New("gemini: invalid header - CRLF not found within maximum length")
 
-// Header of the Response.
-func (r *Response) Header() (code Code, meta string, err error) {
-	if r.headerRead {
-		return r.code, r.meta, nil
-	}
+func readHeader(r io.Reader) (h Header, err error) {
 	// Read <STATUS><SPACE><META><CR><LF>
-	statusLine, ok, err := readUntilCrLf(r.r, 1029)
+	statusLine, ok, err := readUntilCrLf(r, 1029)
 	if err != nil {
 		err = fmt.Errorf("gemini: failed to read status line: %v", err)
 		return
@@ -55,23 +58,22 @@ func (r *Response) Header() (code Code, meta string, err error) {
 		err = ErrCrLfNotFoundWithinMaxLength
 		return
 	}
-	r.headerRead = true
-	parts := strings.SplitN(strings.TrimSpace(string(statusLine)), " ", 2)
+	parts := strings.SplitN(strings.TrimRight(string(statusLine), "\r\n"), " ", 2)
 	if len(parts) != 2 {
 		err = ErrInvalidStatus
 		return
 	}
-	r.code = Code(parts[0])
-	if !isValidCode(r.code) {
+	h.Code = Code(parts[0])
+	if !isValidCode(h.Code) {
 		err = ErrInvalidCode
 		return
 	}
-	r.meta = parts[1]
-	if !isValidMeta(r.meta) {
+	h.Meta = parts[1]
+	if !isValidMeta(h.Meta) {
 		err = ErrInvalidMeta
 		return
 	}
-	return r.code, r.meta, err
+	return
 }
 
 func readUntilCrLf(src io.Reader, maxLength int) (output []byte, ok bool, err error) {
@@ -202,9 +204,14 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 		err = fmt.Errorf("gemini: error writing request: %w", err)
 		return
 	}
-	resp = &Response{
-		r: conn,
-	}
-	_, _, err = resp.Header()
+	resp, err = NewResponse(conn)
 	return
+}
+
+// Record a Gemini handler request in memory and return the response.
+func Record(r *Request, handler Handler) (resp *Response, err error) {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+	handler.ServeGemini(w, r)
+	return NewResponse(ioutil.NopCloser(bytes.NewBuffer(buf.Bytes())))
 }

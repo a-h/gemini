@@ -164,24 +164,20 @@ func TestServer(t *testing.T) {
 			s := &Server{
 				Handler: HandlerFunc(tt.handler),
 			}
-			s.handle(nil, rec)
+			s.handle(Certificate{}, rec)
 
-			response := &Response{
-				r: ioutil.NopCloser(bytes.NewBuffer(rec.written.Bytes())),
-			}
-
-			actualCode, actualMeta, err := response.Header()
+			response, err := NewResponse(ioutil.NopCloser(bytes.NewBuffer(rec.written.Bytes())))
 			if err != tt.expectedHeaderErr {
 				t.Errorf("expected header err: %v, got: %v", tt.expectedHeaderErr, err)
 			}
-			if actualCode != tt.expectedCode {
-				t.Errorf("expected code: %q, got: %q", tt.expectedCode, actualCode)
+			if response.Header.Code != tt.expectedCode {
+				t.Errorf("expected code: %q, got: %q", tt.expectedCode, response.Header.Code)
 			}
-			if actualMeta != tt.expectedMeta {
-				t.Errorf("expected meta: %q, got %q", tt.expectedMeta, actualMeta)
+			if response.Header.Meta != tt.expectedMeta {
+				t.Errorf("expected meta: %q, got %q", tt.expectedMeta, response.Header.Meta)
 			}
 
-			actualBody, err := ioutil.ReadAll(response.Body())
+			actualBody, err := ioutil.ReadAll(response.Body)
 			if err != tt.expectedBodyErr {
 				t.Errorf("expected body err: %v, got: %v", tt.expectedBodyErr, err)
 			}

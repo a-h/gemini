@@ -30,14 +30,16 @@ func (f HandlerFunc) ServeGemini(w ResponseWriter, r *Request) {
 }
 
 // Request from the client. A Gemini request contains only the
-// URL.
+// URL, the Certificates field is populated by the TLS certificates
+// presented by the client.
 type Request struct {
-	URL  *url.URL
-	User *User
+	Context     context.Context
+	URL         *url.URL
+	Certificate Certificate
 }
 
-// User information provided to the server.
-type User struct {
+// Certificate information provided to the server by the client.
+type Certificate struct {
 	// ID is the hex-encoded SHA256 hash of the key.
 	ID string
 	// Key is the user public key in PKIX, ASN.1 DER form.
@@ -169,7 +171,7 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 		srv.logf("gemini: failed TLS handshake from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
-	var user *User
+	var certificate Certificate
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
 	if len(peerCerts) > 0 {
 		pk, err := x509.MarshalPKIXPublicKey(peerCerts[0])
@@ -177,16 +179,15 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 			srv.logf("gemini: failed to marshal public key: %v", err)
 			return
 		}
-		user = &User{
-			ID:  hex.EncodeToString(sha256.New().Sum(pk)),
-			Key: string(pk),
-		}
+		certificate.ID = hex.EncodeToString(sha256.New().Sum(pk))
+		certificate.Key = string(pk)
+
 	}
-	srv.handle(user, tlsConn)
+	srv.handle(certificate, tlsConn)
 }
 
 // while this function could be inlined, exposing it makes it easier to test in isolation.
-func (srv *Server) handle(user *User, rw io.ReadWriter) {
+func (srv *Server) handle(certificate Certificate, rw io.ReadWriter) {
 	start := time.Now()
 	r, ok, err := srv.parseRequest(rw)
 	if err != nil {
@@ -197,20 +198,21 @@ func (srv *Server) handle(user *User, rw io.ReadWriter) {
 		srv.logf("gemini: could not parse request")
 		return
 	}
-	r.User = user
-	w := &geminiWriter{w: rw}
+	r.Context = srv.Context
+	r.Certificate = certificate
+	w := NewWriter(rw)
 	defer func() {
 		if p := recover(); p != nil {
-			srv.logf("gemini: server error: %v: %v", r.URL, p)
+			srv.logf("gemini: server error: %v: %v", r.URL.Path, p)
 			w.SetHeader(CodeCGIError, "internal error")
 		}
 	}()
 	srv.Handler.ServeGemini(w, r)
-	if w.code == "" {
-		srv.logf("gemini: handler for %q resulted in empty response, sending empty document", r.URL.String())
+	if w.Code == "" {
+		srv.logf("gemini: handler for %q resulted in empty response, sending empty document", r.URL.Path)
 		w.SetHeader(CodeCGIError, "empty response")
 	}
-	srv.logf("gemini: %v response: %v time: %v", r.URL.String(), w.code, time.Now().Sub(start))
+	srv.logf("gemini: %v response: %v time: %v", r.URL.Path, w.Code, time.Now().Sub(start))
 }
 
 func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err error) {
@@ -237,24 +239,32 @@ func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err erro
 	return r, true, err
 }
 
-type geminiWriter struct {
-	code string
-	w    io.Writer
+// Writer passed to Gemini handlers.
+type Writer struct {
+	Code   string
+	Writer io.Writer
+}
+
+// NewWriter creates a new Gemini writer.
+func NewWriter(w io.Writer) *Writer {
+	return &Writer{
+		Writer: w,
+	}
 }
 
 var ErrCannotWriteBodyWithoutSuccessCode = errors.New("gemini: cannot write body without success code")
 
-func (gw *geminiWriter) Write(p []byte) (n int, err error) {
-	if gw.code == "" {
+func (gw *Writer) Write(p []byte) (n int, err error) {
+	if gw.Code == "" {
 		// Section 3.3
 		gw.SetHeader(CodeSuccess, "")
-		gw.code = CodeSuccess
+		gw.Code = CodeSuccess
 	}
-	if !isSuccessCode(Code(gw.code)) {
+	if !isSuccessCode(Code(gw.Code)) {
 		err = ErrCannotWriteBodyWithoutSuccessCode
 		return
 	}
-	return gw.w.Write(p)
+	return gw.Writer.Write(p)
 }
 
 func isSuccessCode(code Code) bool {
@@ -264,12 +274,12 @@ func isSuccessCode(code Code) bool {
 // ErrHeaderAlreadyWritten is returned by SetHeader when the Gemini header has already been written to the response.
 var ErrHeaderAlreadyWritten = errors.New("gemini: header already written")
 
-func (gw *geminiWriter) SetHeader(code Code, meta string) (err error) {
-	if gw.code != "" {
+func (gw *Writer) SetHeader(code Code, meta string) (err error) {
+	if gw.Code != "" {
 		return ErrHeaderAlreadyWritten
 	}
-	gw.code = string(code)
-	return writeHeaderToWriter(code, meta, gw.w)
+	gw.Code = string(code)
+	return writeHeaderToWriter(code, meta, gw.Writer)
 }
 
 func writeHeaderToWriter(code Code, meta string, w io.Writer) error {
