@@ -178,10 +178,16 @@ func TestServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := NewRecorder([]byte(tt.request))
 			// Skip the usual setup, because this test doesn't carry out integration work.
-			s := &Server{
-				Handler: HandlerFunc(tt.handler),
+			dh := &DomainHandler{
+				ServerName: "",
+				Handler:    HandlerFunc(tt.handler),
 			}
-			s.handle(tt.cert, rec)
+			s := &Server{
+				DomainToHandler: map[string]*DomainHandler{
+					"": dh,
+				},
+			}
+			s.handle(dh, tt.cert, rec)
 
 			response, err := NewResponse(ioutil.NopCloser(bytes.NewBuffer(rec.written.Bytes())))
 			if err != tt.expectedHeaderErr {
