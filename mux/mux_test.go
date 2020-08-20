@@ -45,7 +45,7 @@ func TestMux(t *testing.T) {
 			requestURL: "/route/b",
 			expectedHeader: gemini.Header{
 				Code: gemini.CodeSuccess,
-				Meta: "text/gemini; charset=utf-8",
+				Meta: gemini.DefaultMIMEType,
 			},
 			expectedBody: "b",
 		},
@@ -67,7 +67,7 @@ func TestMux(t *testing.T) {
 			requestURL: "/user/user213/settings",
 			expectedHeader: gemini.Header{
 				Code: gemini.CodeSuccess,
-				Meta: "text/gemini; charset=utf-8",
+				Meta: gemini.DefaultMIMEType,
 			},
 			expectedBody: "/user/{id}/{section}\nmap[id:user213 section:settings]",
 		},
@@ -102,7 +102,6 @@ func TestMux(t *testing.T) {
 			if tt.expectedBody != string(bdy) {
 				t.Errorf("expected\n%v\nactual\n%v", tt.expectedBody, string(bdy))
 			}
-
 		})
 	}
 }

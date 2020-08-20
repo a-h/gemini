@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+// BadRequest responds with a 59 status.
+func BadRequest(w ResponseWriter, r *Request) {
+	w.SetHeader(CodeBadRequest, "")
+}
+
+// BadRequestHandler creates a handler that returns a bad request code (59).
+func BadRequestHandler() Handler {
+	return HandlerFunc(BadRequest)
+}
+
 // NotFound responds with a 51 status.
 func NotFound(w ResponseWriter, r *Request) {
 	w.SetHeader(CodeNotFound, "")

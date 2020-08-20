@@ -88,7 +88,7 @@ func TestServer(t *testing.T) {
 				w.Write([]byte("# Hello World!"))
 			},
 			expectedCode:      CodeSuccess,
-			expectedMeta:      "text/gemini; charset=utf-8",
+			expectedMeta:      DefaultMIMEType,
 			expectedHeaderErr: nil,
 			expectedBody:      []byte("# Hello World!"),
 			expectedBodyErr:   nil,
@@ -128,7 +128,7 @@ func TestServer(t *testing.T) {
 				w.Write([]byte("OK"))
 			},
 			expectedCode:      CodeSuccess,
-			expectedMeta:      "text/gemini; charset=utf-8",
+			expectedMeta:      DefaultMIMEType,
 			expectedHeaderErr: nil,
 			expectedBody:      []byte("OK"),
 			expectedBodyErr:   nil,

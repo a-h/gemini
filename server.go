@@ -23,10 +23,13 @@ type Handler interface {
 // HandlerFunc handles a Gemini request and returns a response.
 type HandlerFunc func(ResponseWriter, *Request)
 
-// ServeGeServeGemini implements the Handler interface.
+// ServeGemini implements the Handler interface.
 func (f HandlerFunc) ServeGemini(w ResponseWriter, r *Request) {
 	f(w, r)
 }
+
+// DefaultMIMEType for Gemini responses.
+const DefaultMIMEType = "text/gemini; charset=utf-8"
 
 // Request from the client. A Gemini request contains only the
 // URL, the Certificates field is populated by the TLS certificates
@@ -293,7 +296,7 @@ func writeHeaderToWriter(code Code, meta string, w io.Writer) error {
 	// <STATUS><SPACE><META><CR><LF>
 	// Set default meta if required.
 	if meta == "" && isSuccessCode(code) {
-		meta = "text/gemini; charset=utf-8"
+		meta = DefaultMIMEType
 	}
 	if len(meta) > 1024 {
 		meta = meta[:1024]
