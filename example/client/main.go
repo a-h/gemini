@@ -10,24 +10,29 @@ import (
 )
 
 func main() {
+	// Run the server example and ensure that the following lines are in your host file (e.g. /etc/hosts) to allow
+	// the server to listen locally for the two domains.
+	// 127.0.0.1	a.gemini
+	// 127.0.0.1	b.gemini
+
 	client := gemini.NewClient()
 
 	// Make a request to the server without accepting its certificate.
-	r, certificates, authenticated, ok, err := client.Request("gemini://localhost/require_cert")
+	r, certificates, authenticated, ok, err := client.Request("gemini://a.gemini/require_cert")
 	if err != nil {
-		log.Printf("request failed: %v", err)
+		log.Printf("Request failed: %v", err)
 		return
 	}
 	if !ok {
-		log.Printf("request won't be allowed unless the following certificates are accepted: %v", certificates)
+		log.Printf("Request won't be allowed unless the following certificates are accepted: %v", certificates)
 	}
 
 	// Try again with the certificate set.
 	log.Println("Trying again with the certificate added manually.")
-	client.AddAlllowedCertificateForHost("localhost", "3082016f3081f5020900bd8411af77d2f052300a06082a8648ce3d0403023021310b30090603550406130267623112301006035504030c096c6f63616c686f7374301e170d3230303831363231343133305a170d3330303831343231343133305a3021310b30090603550406130267623112301006035504030c096c6f63616c686f73743076301006072a8648ce3d020106052b81040022036200044b8f60f29a38bcf6dd505f68976965ccc78f12270459c403c65e0215c6daee224b6f68c7249d86c2273c62c0a8af8169b6750801264ad563560a5f3c921f5ec1f01eb857a635a3043ae25f26aaa5a375e657467f7f70fdf963496506abfba4fa300a06082a8648ce3d0403020369003066023100a0cd07b89b80b5d8c102b09c8af6d5a11417f83ef9d7d7f4028bc375e2ddd2dcb0f87596ac8a4c32e573f54e0cd44a47023100feacab1b6daee415f2985ddcecb8dc709524e309c87a2731fd72563fb74db559692bfc59abd7287c24e0f0cd506a9236e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	client.AddAlllowedCertificateForHost("a.gemini", "3082016c3081f3020900d4c7c9907518eb61300a06082a8648ce3d0403023020310b30090603550406130267623111300f06035504030c08612e67656d696e69301e170d3230303832303139303330335a170d3330303831383139303330335a3020310b30090603550406130267623111300f06035504030c08612e67656d696e693076301006072a8648ce3d020106052b8104002203620004ae5cabe01f708d8f9423725df49601e1a033a1b51eb73cd3a8a9853011346127cbfedb57c4bd14ad6000ccb2f748d32b2a2b817b1860781d937e7666680874876fb4a9a91c44e2cf8c9804d40f6e7122f6c92a1884b62bd9f0749cca4e12cfa8300a06082a8648ce3d0403020368003065023100ae447eb9455e9ca1f02f013390d2c4029a7f29732cf6e29787b53b6435904d622f47f3b1fbffe60a284dbd4cddd6ef580230518dcb0355d5c3d880357128972c630ca90a915f1eb417a7ea0e4518a72dfc8a76c9b50c51d56f6a6835c4dfa989b72be3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 
 	// Try to access the authenticated area without a client certificate.
-	r, _, authenticated, ok, err = client.Request("gemini://localhost/require_cert")
+	r, _, authenticated, ok, err = client.Request("gemini://a.gemini/require_cert")
 	if err != nil {
 		log.Fatalf("It should work with the certificate added, but got error %v", err)
 	}
@@ -43,11 +48,11 @@ func main() {
 	// Enable client authentication.
 	clientCert, err := tls.LoadX509KeyPair("client.pem", "client.key")
 	if err != nil {
-		log.Fatalf("failed to load keys: %v", err)
+		log.Fatalf("Failed to load keys: %v", err)
 	}
-	client.AddCertificateForURLPrefix("gemini://localhost", clientCert)
+	client.AddCertificateForURLPrefix("gemini://a.gemini", clientCert)
 
-	r, certificates, authenticated, ok, err = client.Request("gemini://localhost/require_cert")
+	r, certificates, authenticated, ok, err = client.Request("gemini://a.gemini/require_cert")
 	fmt.Println("Authenticated:", authenticated)
 	fmt.Println("Code:", r.Header.Code)
 	fmt.Println("Meta:", r.Header.Meta)
@@ -57,4 +62,20 @@ func main() {
 		log.Fatalf("failed to read body: %v", err)
 	}
 	fmt.Println(string(body))
+
+	fmt.Println("Now attempting to access b.gemini...")
+	client.AddAlllowedCertificateForHost("b.gemini", "3082016c3081f3020900bb2a5435c3beaec4300a06082a8648ce3d0403023020310b30090603550406130267623111300f06035504030c08622e67656d696e69301e170d3230303832303139303032375a170d3330303831383139303032375a3020310b30090603550406130267623111300f06035504030c08622e67656d696e693076301006072a8648ce3d020106052b8104002203620004e3fc081f8c7de5e558c9b054d4b8ea1005786aef3d38b2de2cd7b5950ed98926fa4402360441e2b61587581d0f4d7f8156b770b06c2dfa15e27104d38f39587cc1bd3c3984518d5c35c1e4f789317c01ce54c9fd1402417a9cb2e25048ee48da300a06082a8648ce3d0403020368003065023100b4eca072abaa84eafe983ffeddd5e0ac0fc7dbd5b22d02bd80438f8d1ee1348d222a43af951e986c19492aaf7426728d02305de8eca89504be7b6f12430f9be8d4d8192c919d9b5bc6846d8c399f7155c7bbaae7592681be06c9b6553a2fffd662d0e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	r, certificates, authenticated, ok, err = client.Request("gemini://b.gemini")
+	if err != nil {
+		log.Fatalf("Failed to access b.gemini: %v", err)
+	}
+	if !ok {
+		log.Fatalf("No known certificate for b.gemini, the server provided certificates: %v", certificates)
+	}
+	fmt.Printf("Received header request: %v\n", r.Header)
+	bdy, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Fatalf("Failed to read body: %v", err)
+	}
+	fmt.Println(string(bdy))
 }

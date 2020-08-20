@@ -83,30 +83,24 @@ const (
 
 // NewServer creates a new Gemini server.
 // addr is in the form "<optional_ip>:<port>", e.g. ":1965". If left empty, it will default to ":1965".
-// cert is the X509 keypair. This can be generated using openssl:
-//   openssl ecparam -genkey -name secp384r1 -out server.key
-//   openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
-// cert can be loaded using tls.LoadX509KeyPair(certFile, keyFile).
-// handler is the Gemini handler used to serve content.
-func NewServer(ctx context.Context, addr string, cert tls.Certificate, handler Handler) *Server {
+// domainToHandler is a map of the server name (domain) to the certificate key pair and the Gemini handler used to serve content.
+func NewServer(ctx context.Context, addr string, domainToHandler map[string]*DomainHandler) *Server {
 	return &Server{
-		Addr:         addr,
-		Context:      ctx,
-		Handler:      handler,
-		KeyPair:      cert,
-		ReadTimeout:  time.Second * 10,
-		WriteTimeout: time.Second * 30,
+		Context:         ctx,
+		Addr:            addr,
+		DomainToHandler: domainToHandler,
+		ReadTimeout:     time.Second * 10,
+		WriteTimeout:    time.Second * 30,
 	}
 }
 
 // Server hosts Gemini content.
 type Server struct {
-	Addr         string
-	Handler      Handler
-	Context      context.Context
-	KeyPair      tls.Certificate
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Context         context.Context
+	Addr            string
+	DomainToHandler map[string]*DomainHandler
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
 }
 
 func (srv *Server) logf(format string, v ...interface{}) {
@@ -130,6 +124,9 @@ func (srv *Server) ListenAndServe() error {
 	}
 	defer ln.Close()
 	err = srv.serveTLS(ln)
+	if err != nil {
+		srv.logf("gemini: failure in serveTLS: %v", err)
+	}
 	srv.logf("gemini: stopped")
 	return err
 }
@@ -138,12 +135,17 @@ func (srv *Server) ListenAndServe() error {
 var ErrServerClosed = errors.New("gemini: server closed")
 
 func (srv *Server) serveTLS(l net.Listener) (err error) {
-	certificates := []tls.Certificate{srv.KeyPair}
 	config := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
-		Certificates:       certificates,
 		ClientAuth:         tls.RequestClientCert,
 		InsecureSkipVerify: true,
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			dh, ok := srv.DomainToHandler[hello.ServerName]
+			if !ok {
+				return nil, fmt.Errorf("gemini: certificate not found for %q", hello.ServerName)
+			}
+			return &dh.KeyPair, nil
+		},
 	}
 	if err != nil {
 		return err
@@ -189,11 +191,16 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 			certificate.Error = "certificate expired"
 		}
 	}
-	srv.handle(certificate, tlsConn)
+	serverName := tlsConn.ConnectionState().ServerName
+	dh, ok := srv.DomainToHandler[serverName]
+	if !ok {
+		srv.logf("gemini: failed to find domain handler for serverName: %q", serverName)
+	}
+	srv.handle(dh, certificate, tlsConn)
 }
 
 // while this function could be inlined, exposing it makes it easier to test in isolation.
-func (srv *Server) handle(certificate Certificate, rw io.ReadWriter) {
+func (srv *Server) handle(dh *DomainHandler, certificate Certificate, rw io.ReadWriter) {
 	start := time.Now()
 	r, ok, err := srv.parseRequest(rw)
 	if err != nil {
@@ -217,7 +224,7 @@ func (srv *Server) handle(certificate Certificate, rw io.ReadWriter) {
 		w.SetHeader(CodeClientCertificateNotValid, certificate.Error)
 		return
 	}
-	srv.Handler.ServeGemini(w, r)
+	dh.Handler.ServeGemini(w, r)
 	if w.Code == "" {
 		srv.logf("gemini: handler for %q resulted in empty response, sending empty document", r.URL.Path)
 		w.SetHeader(CodeCGIError, "empty response")
@@ -305,12 +312,41 @@ func writeHeaderToWriter(code Code, meta string, w io.Writer) error {
 	return err
 }
 
-// ListenAndServe starts up a new server using the provided certFile, keyFile and handler.
-func ListenAndServe(ctx context.Context, addr string, certFile, keyFile string, handler Handler) (err error) {
+// DomainHandler handles incoming requests for the ServerName using the provided KeyPair certificate
+// and Handler to process the request.
+type DomainHandler struct {
+	ServerName string
+	KeyPair    tls.Certificate
+	Handler    Handler
+}
+
+// NewDomainHandler creates a new handler to listen for Gemini requests using TLS.
+// certFile / keyFile are links to the X509 keypair. This can be generated using openssl:
+// keyFile:
+//   openssl ecparam -genkey -name secp384r1 -out server.key
+// certFile:
+//   openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+func NewDomainHandler(serverName, certFile, keyFile string, handler Handler) (*DomainHandler, error) {
 	keyPair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return
+		return nil, err
 	}
-	server := NewServer(ctx, addr, keyPair, handler)
+	return &DomainHandler{
+		ServerName: serverName,
+		KeyPair:    keyPair,
+		Handler:    handler,
+	}, nil
+}
+
+// ListenAndServe starts up a new server to handle multiple domains with a specific certFile, keyFile and handler.
+func ListenAndServe(ctx context.Context, addr string, domains ...*DomainHandler) (err error) {
+	if len(domains) == 0 {
+		return fmt.Errorf("gemini: no default handler provided")
+	}
+	domainToHandler := make(map[string]*DomainHandler, len(domains))
+	for i := 0; i < len(domains); i++ {
+		domainToHandler[domains[i].ServerName] = domains[i]
+	}
+	server := NewServer(ctx, addr, domainToHandler)
 	return server.ListenAndServe()
 }
