@@ -123,6 +123,8 @@ type Client struct {
 	prefixToCertificate map[string]tls.Certificate
 	// domainToAllowedCertificateHash is used to validate the remote server.
 	domainToAllowedCertificateHash map[string]map[string]interface{}
+	// Insecure mode does not check the hash of remote certificates.
+	Insecure bool
 }
 
 // AddCertificateForURLPrefix adds the certificate when the URL prefix is encountered.
@@ -183,7 +185,6 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 		hash := hex.EncodeToString(sha256.New().Sum(cert.Raw))
 		certificates = append(certificates, hash)
 		if _, ok = allowedHashesForDomain[hash]; ok {
-			ok = true
 			break
 		}
 		if time.Now().Before(cert.NotBefore) {
@@ -195,7 +196,7 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 			return
 		}
 	}
-	if !ok {
+	if !ok && !client.Insecure {
 		return
 	}
 	authenticated = conn.ConnectionState().NegotiatedProtocolIsMutual

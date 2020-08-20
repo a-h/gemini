@@ -81,6 +81,14 @@ const (
 	CodeClientCertificateNotValid           = "62"
 )
 
+// IsErrorCode returns true if the code is invalid, or starts with 4, 5 or 6.
+func IsErrorCode(code Code) bool {
+	if !isValidCode(code) || len(code) != 2 {
+		return false
+	}
+	return code[0] == '4' || code[0] == '5' || code[0] == '6'
+}
+
 // NewServer creates a new Gemini server.
 // addr is in the form "<optional_ip>:<port>", e.g. ":1965". If left empty, it will default to ":1965".
 // domainToHandler is a map of the server name (domain) to the certificate key pair and the Gemini handler used to serve content.
