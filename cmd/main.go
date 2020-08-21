@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -108,7 +108,14 @@ func request(args []string) {
 		fmt.Printf("%v %v\r\n", resp.Header.Code, resp.Header.Meta)
 	}
 	if *headersFlag != true {
-		io.Copy(os.Stdout, resp.Body)
+		s := bufio.NewScanner(resp.Body)
+		for s.Scan() {
+			fmt.Println(s.Text())
+		}
+		if s.Err() != nil {
+			fmt.Printf("Error reading response body: %v\n", err)
+			os.Exit(1)
+		}
 		defer resp.Body.Close()
 	}
 	if gemini.IsErrorCode(resp.Header.Code) {
