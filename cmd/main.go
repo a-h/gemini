@@ -13,6 +13,8 @@ import (
 	"github.com/a-h/gemini"
 )
 
+var Version = ""
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -25,6 +27,12 @@ func main() {
 	case "serve":
 		serve(os.Args[2:])
 		return
+	case "version":
+		fmt.Println(Version)
+		return
+	case "--version":
+		fmt.Println(Version)
+		return
 	}
 	usage()
 }
@@ -35,6 +43,7 @@ To see help text, you can run:
 
   gemini request --help
   gemini serve --help
+  gemini version
 
 examples:
 
