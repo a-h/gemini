@@ -2,22 +2,37 @@
 
 Applications and libraries for building applications on Gemini (see https://gemini.circumlunar.space/).
 
-Includes:
+## Gemini CLI
 
-* Gemini Go libraries:
-  * `gemini.Server` / `gemini.ListenAndServe` to build your own custom servers. Supports hosting multiple Gemini servers on a single IP address.
-  * `github.com/a-h/gemini/mux` to provide routing between Gemini handlers and extract variables from URL paths.
-  * `RequireCertificateHandler` a handler that ensures that users present certificates.
-  * `FileSystemHandler` to support hosting static content.
-* The `gemini` command line tool.
-  * A Gemini server:
-    * `gemini serve --host=example.com --certFile=a.crt --keyFile=a.key --path=.` to host Gemini content.
-  * A Gemini request tool (curl for Gemini):
-    * `gemini request --insecure --verbose gemini://example.com/pass` to access Gemini content.
-* A Docker image containing a server for hosting content using Docker.
-  * `docker run -v /path_to_your_cert_files:/certs -e PORT=1965 -e DOMAIN=localhost -v /path_to_your_content:/content -p 1965:1965 adrianhesketh/gemini:latest` to host Gemini content using Docker.
+### Run a server
 
-## Getting started
+```sh
+gemini serve --host=example.com --certFile=a.crt --keyFile=a.key --path=.
+```
+
+### Request content
+
+curl for Gemini.
+
+```sh
+gemini request --insecure --verbose gemini://example.com/pass
+```
+
+## Gemini Server Docker image
+
+### Run a server with Docker
+
+```sh
+docker run \
+    -v /path_to_your_cert_files:/certs \
+    -e PORT=1965 \
+    -e DOMAIN=localhost \
+    -v /path_to_your_content:/content \
+    -p 1965:1965 \
+    adrianhesketh/gemini:latest
+```
+
+## Quick start
 
 Check out https://github.com/a-h/gemini/releases for the latest version of the `gemini` command line tool to run locally, or use Docker:
 
@@ -35,7 +50,11 @@ docker run -v `pwd`:/certs -e PORT=1965 -e DOMAIN=localhost -v `pwd`/content:/co
 
 ## Libraries
 
-### Server
+### Serve
+
+Use `gemini.Server` / `gemini.ListenAndServe` to build your own custom servers. 
+
+Supports hosting multiple Gemini servers on a single IP address.
 
 These are used to build a Gemini application that supports dynamic content.
 
@@ -68,6 +87,7 @@ func main() {
 
 	// Create a router for gemini://a.gemini/require_cert and gemini://a.gemini/public
 	routerA := mux.NewMux()
+	// Let's make /require_cert require the client to be authenticated.
 	routerA.AddRoute("/require_cert", gemini.RequireCertificateHandler(helloHandler, nil))
 	routerA.AddRoute("/public", okHandler)
 
@@ -93,7 +113,17 @@ func main() {
 }
 ```
 
-### Example client
+### Route
+
+Use `github.com/a-h/gemini/mux` to provide routing between Gemini handlers and extract variables from URL paths.
+
+### Built-in utility handlers
+
+* `RequireCertificateHandler` a handler that ensures that users present certificates.
+* `FileSystemHandler` to support hosting static content.
+
+
+### Gemini client
 
 ```go
 client := gemini.NewClient()
