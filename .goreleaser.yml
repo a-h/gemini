@@ -25,6 +25,8 @@ signs:
 dockers:
   - image_templates:
     - adrianhesketh/gemini
+    extra_files:
+    - serve-gemini.sh
 archives:
 - replacements:
     darwin: Darwin
