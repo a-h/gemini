@@ -20,22 +20,22 @@ func TestFileSystemHandler(t *testing.T) {
 		expectedBody   string
 	}{
 		{
-			name:           "if a directory contains index.gemini, it is used",
+			name:           "if a directory contains index.gmi, it is used",
 			url:            "/a",
 			expectedHeader: geminiSuccessHeader,
-			expectedBody:   "# /tests/a/index.gemini\n",
+			expectedBody:   "# /tests/a/index.gmi\n",
 		},
 		{
 			name:           "files can be accessed directly",
-			url:            "/a/index.gemini",
+			url:            "/a/index.gmi",
 			expectedHeader: geminiSuccessHeader,
-			expectedBody:   "# /tests/a/index.gemini\n",
+			expectedBody:   "# /tests/a/index.gmi\n",
 		},
 		{
 			name:           "a slash prefix is added if missing",
-			url:            "a/index.gemini",
+			url:            "a/index.gmi",
 			expectedHeader: geminiSuccessHeader,
-			expectedBody:   "# /tests/a/index.gemini\n",
+			expectedBody:   "# /tests/a/index.gmi\n",
 		},
 		{
 			name:           "if a directory does not contain an index, a listing is returned",
@@ -50,7 +50,7 @@ func TestFileSystemHandler(t *testing.T) {
 		},
 		{
 			name: "directory traversal attacks are deflected",
-			url:  "../a/index.gemini",
+			url:  "../a/index.gmi",
 			expectedHeader: Header{
 				Code: CodeBadRequest,
 			},

@@ -42,7 +42,7 @@ openssl ecparam -genkey -name secp384r1 -out server.key
 openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
 # Make a Gemini file.
 mkdir content
-echo "# Hello, World!" > content/index.gemini
+echo "# Hello, World!" > content/index.gmi
 # Run the container.
 docker pull adrianhesketh/gemini:latest
 docker run -v `pwd`:/certs -e PORT=1965 -e DOMAIN=localhost -v `pwd`/content:/content -p 1965:1965 adrianhesketh/gemini:latest

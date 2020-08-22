@@ -101,16 +101,16 @@ func FileSystemHandler(fs FileSystem) Handler {
 			return
 		}
 		if stat.IsDir() {
-			// Look for index.gemini first before listing contents.
+			// Look for index.gmi first before listing contents.
 			if !strings.HasSuffix(r.URL.Path, "/") {
 				r.URL.Path += "/"
 			}
-			index, err := fs.Open(r.URL.Path + "index.gemini")
+			index, err := fs.Open(r.URL.Path + "index.gmi")
 			if errors.Is(err, os.ErrNotExist) {
 				DirectoryListingHandler(r.URL.Path, f).ServeGemini(w, r)
 				return
 			}
-			FileContentHandler("index.gemini", index).ServeGemini(w, r)
+			FileContentHandler("index.gmi", index).ServeGemini(w, r)
 			return
 		}
 		FileContentHandler(stat.Name(), f).ServeGemini(w, r)
