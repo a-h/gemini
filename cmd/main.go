@@ -54,6 +54,7 @@ examples:
 
 func request(args []string) {
 	cmd := flag.NewFlagSet("request", flag.ExitOnError)
+	noTLSFlag := cmd.Bool("noTLS", false, "Don't connect with TLS, or send client server certificates.")
 	insecureFlag := cmd.Bool("insecure", false, "Allow any server certificate.")
 	certFileFlag := cmd.String("certFile", "", "Path to a client certificate file (must also set keyFile if this is used).")
 	keyFileFlag := cmd.String("keyFile", "", "Path to a client key file (must also set certFile if this is used).")
@@ -88,7 +89,15 @@ func request(args []string) {
 		}
 		client.AddCertificateForURLPrefix("/", keyPair)
 	}
-	resp, certificates, authenticated, ok, err := client.RequestURL(u)
+	var authenticated, ok bool
+	var resp *gemini.Response
+	var certificates []string
+	if *noTLSFlag {
+		ok = true // No server validation takes place.
+		resp, err = client.RequestNoTLS(u)
+	} else {
+		resp, certificates, authenticated, ok, err = client.RequestURL(u)
+	}
 	if err != nil {
 		fmt.Printf("Request failed: %v\n", err)
 		os.Exit(1)

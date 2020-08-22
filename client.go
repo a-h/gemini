@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -59,7 +60,7 @@ func readHeader(r io.Reader) (h Header, err error) {
 		return
 	}
 	parts := strings.SplitN(strings.TrimRight(string(statusLine), "\r\n"), " ", 2)
-	if len(parts) != 2 {
+	if len(parts) != 1 && len(parts) != 2 {
 		err = ErrInvalidStatus
 		return
 	}
@@ -68,10 +69,12 @@ func readHeader(r io.Reader) (h Header, err error) {
 		err = ErrInvalidCode
 		return
 	}
-	h.Meta = parts[1]
-	if !isValidMeta(h.Meta) {
-		err = ErrInvalidMeta
-		return
+	if len(h.Meta) > 1 {
+		h.Meta = parts[1]
+		if !isValidMeta(h.Meta) {
+			err = ErrInvalidMeta
+			return
+		}
 	}
 	return
 }
@@ -161,8 +164,22 @@ func (client *Client) GetCertificate(u *url.URL) (cert tls.Certificate, ok bool)
 	return
 }
 
+// RequestNoTLS carries out a request without TLS enabled.
+func (client *Client) RequestNoTLS(u *url.URL) (resp *Response, err error) {
+	port := u.Port()
+	if port == "" {
+		port = "1965"
+	}
+	conn, err := net.Dial("tcp", u.Host+":"+port)
+	if err != nil {
+		err = fmt.Errorf("gemini: error connecting: %w", err)
+		return
+	}
+	return client.RequestConn(conn, u)
+}
+
 // RequestURL requests a response from a parsed URL.
-// ok returns true if a matching certificate is found.
+// ok returns true if a matching server certificate is found (i.e. the server is OK).
 func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []string, authenticated, ok bool, err error) {
 	config := &tls.Config{
 		InsecureSkipVerify: true,
@@ -178,11 +195,12 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 	if err != nil {
 		err = fmt.Errorf("gemini: error connecting: %w", err)
 		return
+
 	}
 	allowedHashesForDomain := client.domainToAllowedCertificateHash[u.Host]
 	ok = false
 	for _, cert := range conn.ConnectionState().PeerCertificates {
-		hash := hex.EncodeToString(sha256.New().Sum(cert.Raw))
+		hash := base64.StdEncoding.EncodeToString(sha256.New().Sum(cert.Raw))
 		certificates = append(certificates, hash)
 		if _, ok = allowedHashesForDomain[hash]; ok {
 			break
@@ -200,6 +218,13 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 		return
 	}
 	authenticated = conn.ConnectionState().NegotiatedProtocolIsMutual
+	resp, err = client.RequestConn(conn, u)
+	return
+}
+
+// RequestConn uses a given connection to make the request. This allows for insecure requests to be made.
+// net.Dial("tcp", "localhost:1965")
+func (client *Client) RequestConn(conn net.Conn, u *url.URL) (resp *Response, err error) {
 	_, err = conn.Write([]byte(u.String() + "\r\n"))
 	if err != nil {
 		err = fmt.Errorf("gemini: error writing request: %w", err)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -42,7 +42,7 @@ type Request struct {
 
 // Certificate information provided to the server by the client.
 type Certificate struct {
-	// ID is the hex-encoded SHA256 hash of the key.
+	// ID is the base64-encoded SHA256 hash of the key.
 	ID string
 	// Key is the user public key in PKIX, ASN.1 DER form.
 	Key string
@@ -106,6 +106,7 @@ func NewServer(ctx context.Context, addr string, domainToHandler map[string]*Dom
 type Server struct {
 	Context         context.Context
 	Addr            string
+	Insecure        bool
 	DomainToHandler map[string]*DomainHandler
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
@@ -131,9 +132,16 @@ func (srv *Server) ListenAndServe() error {
 		return err
 	}
 	defer ln.Close()
-	err = srv.serveTLS(ln)
-	if err != nil {
-		srv.logf("gemini: failure in serveTLS: %v", err)
+	if srv.Insecure {
+		err = srv.serveInsecure(ln)
+		if err != nil {
+			srv.logf("gemini: failure in serveInsecure")
+		}
+	} else {
+		err = srv.serveTLS(ln)
+		if err != nil {
+			srv.logf("gemini: failure in serveTLS: %v", err)
+		}
 	}
 	srv.logf("gemini: stopped")
 	return err
@@ -141,6 +149,31 @@ func (srv *Server) ListenAndServe() error {
 
 // ErrServerClosed is returned when a server is attempted to start up when it's already shutting down.
 var ErrServerClosed = errors.New("gemini: server closed")
+
+func (srv *Server) serveInsecure(l net.Listener) (err error) {
+	if len(srv.DomainToHandler) > 1 {
+		return fmt.Errorf("gemini: cannot start insecure mode for more than one domain")
+	}
+	var handler *DomainHandler
+	for _, handler = range srv.DomainToHandler {
+		break
+	}
+	for {
+		if err = srv.Context.Err(); err != nil {
+			srv.logf("gemini: context caused shutdown: %v", err)
+			return err
+		}
+		rw, err := l.Accept()
+		if err != nil {
+			srv.logf("gemini: insecure listener error: %v", err)
+			continue
+		}
+		go func() {
+			defer rw.Close()
+			srv.handle(handler, Certificate{}, rw)
+		}()
+	}
+}
 
 func (srv *Server) serveTLS(l net.Listener) (err error) {
 	config := &tls.Config{
@@ -164,33 +197,33 @@ func (srv *Server) serveTLS(l net.Listener) (err error) {
 			srv.logf("gemini: context caused shutdown: %v", err)
 			return err
 		}
-		rw, err := tlsListener.Accept()
+		conn, err := tlsListener.Accept()
 		if err != nil {
 			srv.logf("gemini: tls listener error: %v", err)
 			continue
 		}
-		go srv.handshakeAndHandle(rw)
+		tlsConn, ok := conn.(*tls.Conn)
+		if !ok {
+			panic("gemini: tls.Listener did not return TLS connection")
+		}
+		go srv.handleTLS(tlsConn)
 	}
 }
 
-func (srv *Server) handshakeAndHandle(conn net.Conn) {
+func (srv *Server) handleTLS(conn *tls.Conn) {
 	defer conn.Close()
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		panic("gemini: serving unencrypted traffic is not permitted")
-	}
-	tlsConn.SetReadDeadline(time.Now().Add(srv.ReadTimeout))
-	tlsConn.SetWriteDeadline(time.Now().Add(srv.WriteTimeout))
-	if err := tlsConn.Handshake(); err != nil {
+	conn.SetReadDeadline(time.Now().Add(srv.ReadTimeout))
+	conn.SetWriteDeadline(time.Now().Add(srv.WriteTimeout))
+	if err := conn.Handshake(); err != nil {
 		srv.logf("gemini: failed TLS handshake from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
 	var certificate Certificate
-	peerCerts := tlsConn.ConnectionState().PeerCertificates
+	peerCerts := conn.ConnectionState().PeerCertificates
 	if len(peerCerts) > 0 {
 		now := time.Now()
 		cert := peerCerts[0]
-		certificate.ID = hex.EncodeToString(sha256.New().Sum(cert.Raw))
+		certificate.ID = base64.StdEncoding.EncodeToString(sha256.New().Sum(cert.Raw))
 		certificate.Key = string(cert.Raw)
 		if now.Before(cert.NotBefore) {
 			certificate.Error = "certificate not yet valid"
@@ -199,12 +232,12 @@ func (srv *Server) handshakeAndHandle(conn net.Conn) {
 			certificate.Error = "certificate expired"
 		}
 	}
-	serverName := tlsConn.ConnectionState().ServerName
+	serverName := conn.ConnectionState().ServerName
 	dh, ok := srv.DomainToHandler[serverName]
 	if !ok {
 		srv.logf("gemini: failed to find domain handler for serverName: %q", serverName)
 	}
-	srv.handle(dh, certificate, tlsConn)
+	srv.handle(dh, certificate, conn)
 }
 
 // while this function could be inlined, exposing it makes it easier to test in isolation.
