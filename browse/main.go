@@ -1,8 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -41,12 +42,17 @@ func main() {
 		//TODO: Load up a home page.
 		urlString = "gemini://localhost"
 	}
+	var askForURL, ok bool
+	askForURL = true
 	for {
 		// Grab the URL input.
-		urlString, ok := NewInput(s, 0, 0, tcell.StyleDefault, "Location:", urlString).Focus()
-		if !ok {
-			break
+		if askForURL {
+			urlString, ok = NewInput(s, 0, 0, tcell.StyleDefault, "Location:", urlString).Focus()
+			if !ok {
+				break
+			}
 		}
+		askForURL = !askForURL
 
 		// Check the URL.
 		u, err := url.Parse(urlString)
@@ -75,8 +81,9 @@ func main() {
 			}
 			if !ok {
 				//TOFU check required.
-				switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Accept client certificate?\n\n  %v", certificates[0]), "Accept", "Reject").Focus() {
+				switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Accept client certificate?\n  %v", certificates[0]), "Accept", "Reject").Focus() {
 				case "Accept":
+					//TODO: Save this in a persistent store.
 					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
 					continue
 				case "Reject":
@@ -97,17 +104,37 @@ func main() {
 				break
 			}
 		}
-		//if resp.Header.Code == gemini.CodeInput {
-		//text, ok := NewInput(s, 0, 0, tcell.StyleDefault, resp.Header.Meta, "").Focus()
-		////TODO: Post the input back.
-		//continue
-		//}
+		if resp.Header.Code == gemini.CodeInput {
+			text, ok := NewInput(s, 0, 0, tcell.StyleDefault, resp.Header.Meta, "").Focus()
+			if !ok {
+				continue
+			}
+			// Post the input back.
+			askForURL = false
+			u.RawQuery = url.QueryEscape(text)
+			urlString = u.String()
+			continue
+		}
 		if strings.HasPrefix(string(resp.Header.Code), "3") {
 			//TODO: Handle redirect.
 			redirectCount++
 		}
 		if strings.HasPrefix(string(resp.Header.Code), "2") {
-			NewBrowser(s, u, resp).Focus()
+			b, err := NewBrowser(s, u, resp)
+			if err != nil {
+				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
+				continue
+			}
+			next, err := b.Focus()
+			if err != nil {
+				//TODO: The link was garbage, show the error.
+				continue
+			}
+			if next != nil {
+				askForURL = false
+				urlString = next.String()
+				continue
+			}
 			continue
 		}
 		NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Unknown code: %v %s", resp.Header.Code, resp.Header.Meta), "OK").Focus()
@@ -181,14 +208,20 @@ type Text struct {
 
 func (t Text) Draw() (x, y int) {
 	maxX, maxY := t.Screen.Size()
-	flowed := flow(t.Text, maxX)
-	for lineIndex := 0; lineIndex < len(flowed); lineIndex++ {
-		y := t.Y + lineIndex
+	maxWidth := maxX - t.X
+	if maxWidth < 0 {
+		// It's off screen, so there's nothing to display.
+		return
+	}
+	lines := flow(t.Text, maxWidth)
+	var requiredMaxWidth int
+	for lineIndex := 0; lineIndex < len(lines); lineIndex++ {
+		y = t.Y + lineIndex
 		if y > maxY {
 			break
 		}
 		x = t.X
-		for _, c := range flowed[lineIndex] {
+		for _, c := range lines[lineIndex] {
 			var comb []rune
 			w := runewidth.RuneWidth(c)
 			if w == 0 {
@@ -198,9 +231,12 @@ func (t Text) Draw() (x, y int) {
 			}
 			t.Screen.SetContent(x, y, c, comb, t.Style)
 			x += w
+			if x > requiredMaxWidth {
+				requiredMaxWidth = x
+			}
 		}
 	}
-	return x, y
+	return requiredMaxWidth, y
 }
 
 func NewOptions(s tcell.Screen, x, y int, st tcell.Style, msg string, opts ...string) *Options {
@@ -274,42 +310,255 @@ func (o *Options) Focus() string {
 	}
 }
 
-func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) *Browser {
-	return &Browser{
-		Screen:   s,
-		URL:      u,
+func NewLineConverter(resp *gemini.Response) *LineConverter {
+	return &LineConverter{
 		Response: resp,
 	}
 }
 
+type LineConverter struct {
+	Response     *gemini.Response
+	preFormatted bool
+}
+
+func (lc *LineConverter) process(s string) (l Line, isVisualLine bool) {
+	if strings.HasPrefix(s, "```") {
+		lc.preFormatted = !lc.preFormatted
+		return l, false
+	}
+	if lc.preFormatted {
+		return PreformattedTextLine{Text: s}, true
+	}
+	if strings.HasPrefix(s, "=>") {
+		return LinkLine{Text: s}, true
+	}
+	if strings.HasPrefix(s, "#") {
+		return HeadingLine{Text: s}, true
+	}
+	if strings.HasPrefix(s, "* ") {
+		return UnorderedListItemLine{Text: s}, true
+	}
+	if strings.HasPrefix(s, ">") {
+		return QuoteLine{Text: s}, true
+	}
+	return TextLine{Text: s}, true
+}
+
+func (lc *LineConverter) Lines() (lines []Line, err error) {
+	reader := bufio.NewReader(lc.Response.Body)
+	var s string
+	for {
+		s, err = reader.ReadString('\n')
+		line, isVisual := lc.process(strings.TrimRight(s, "\n"))
+		if isVisual {
+			lines = append(lines, line)
+		}
+		if err != nil {
+			break
+		}
+	}
+	if err == io.EOF {
+		err = nil
+	}
+	return
+}
+
+type Line interface {
+	Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int)
+}
+
+type TextLine struct {
+	Text string
+}
+
+func (l TextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	return NewText(to, atX, atY, tcell.StyleDefault, l.Text).Draw()
+}
+
+type PreformattedTextLine struct {
+	Text string
+}
+
+func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	return NewText(to, atX, atY, tcell.StyleDefault, l.Text).Draw()
+}
+
+type LinkLine struct {
+	Text string
+}
+
+func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
+	urlString := strings.TrimPrefix(l.Text, "=>")
+	urlString = strings.TrimSpace(urlString)
+	urlString = strings.SplitN(urlString, " ", 2)[0]
+	u, err = url.Parse(urlString)
+	if err != nil {
+		return
+	}
+	if u.IsAbs() || relativeTo == nil {
+		return
+	}
+	return relativeTo.ResolveReference(u), nil
+}
+
+func (l LinkLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	ls := tcell.StyleDefault.Foreground(tcell.ColorBlue)
+	if highlighted {
+		ls = ls.Underline(true)
+	}
+	return NewText(to, atX+2, atY, ls, l.Text).Draw()
+}
+
+type HeadingLine struct {
+	Text string
+}
+
+func (l HeadingLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	return NewText(to, atX, atY, tcell.StyleDefault.Foreground(tcell.ColorGreen), l.Text).Draw()
+}
+
+type UnorderedListItemLine struct {
+	Text string
+}
+
+func (l UnorderedListItemLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	return NewText(to, atX+2, atY, tcell.StyleDefault, l.Text).Draw()
+}
+
+type QuoteLine struct {
+	Text string
+}
+
+func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	return NewText(to, atX+2, atY, tcell.StyleDefault.Foreground(tcell.ColorLightGrey), l.Text).Draw()
+}
+
+func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
+	b = &Browser{
+		Screen:          s,
+		URL:             u,
+		ResponseHeader:  resp.Header,
+		ActiveLineIndex: -1,
+	}
+	b.Lines, err = NewLineConverter(resp).Lines()
+	return
+}
+
 type Browser struct {
-	Screen   tcell.Screen
-	URL      *url.URL
-	Response *gemini.Response
+	Screen          tcell.Screen
+	URL             *url.URL
+	ResponseHeader  *gemini.Header
+	Lines           []Line
+	ActiveLineIndex int
+}
+
+func (b *Browser) Links() (indices []int) {
+	for i := 0; i < len(b.Lines); i++ {
+		if _, ok := b.Lines[i].(LinkLine); ok {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+func (b *Browser) CurrentLink() (u *url.URL, err error) {
+	for i := 0; i < len(b.Lines); i++ {
+		if i == b.ActiveLineIndex {
+			if ll, ok := b.Lines[b.ActiveLineIndex].(LinkLine); ok {
+				return ll.URL(b.URL)
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (b *Browser) PreviousLink() {
+	ll := b.Links()
+	if len(ll) == 0 {
+		return
+	}
+	if b.ActiveLineIndex < 0 {
+		b.ActiveLineIndex = ll[len(ll)-1]
+		return
+	}
+	var curIndex, li int
+	for curIndex, li = range ll {
+		if li == b.ActiveLineIndex {
+			break
+		}
+	}
+	if curIndex == 0 {
+		b.ActiveLineIndex = ll[len(ll)-1]
+		return
+	}
+	b.ActiveLineIndex = ll[curIndex-1]
+}
+
+func (b *Browser) NextLink() {
+	ll := b.Links()
+	if len(ll) == 0 {
+		return
+	}
+	if b.ActiveLineIndex < 0 {
+		b.ActiveLineIndex = ll[0]
+		return
+	}
+	var curIndex, li int
+	for curIndex, li = range ll {
+		if li == b.ActiveLineIndex {
+			break
+		}
+	}
+	if curIndex == len(ll)-1 {
+		b.ActiveLineIndex = ll[0]
+		return
+	}
+	b.ActiveLineIndex = ll[curIndex+1]
 }
 
 func (b Browser) Draw() {
 	b.Screen.Clear()
-	//TODO: Handle error reading.
-	body, _ := ioutil.ReadAll(b.Response.Body)
-	//TODO: Render the lines properly.
-	NewText(b.Screen, 0, 0, tcell.StyleDefault, string(body)).Draw()
+	//TODO: Handle scrolling.
+	var y int
+	for lineIndex, line := range b.Lines {
+		highlighted := lineIndex == b.ActiveLineIndex
+		_, yy := line.Draw(b.Screen, 0, y, highlighted)
+		y = yy + 1
+	}
 }
 
-func (b Browser) Focus() {
+func (b Browser) Focus() (next *url.URL, err error) {
 	b.Draw()
 	b.Screen.Show()
 	for {
 		switch ev := b.Screen.PollEvent().(type) {
 		case *tcell.EventResize:
 			b.Screen.Sync()
-			b.Draw()
-			b.Screen.Show()
 		case *tcell.EventKey:
-			if ev.Key() == tcell.KeyEscape {
+			switch ev.Key() {
+			case tcell.KeyEscape:
 				return
+			case tcell.KeyBacktab:
+				b.PreviousLink()
+			case tcell.KeyTAB:
+				b.NextLink()
+			case tcell.KeyCtrlO:
+				b.PreviousLink()
+			case tcell.KeyEnter:
+				return b.CurrentLink()
+			case tcell.KeyRune:
+				switch ev.Rune() {
+				case 'j':
+					//TODO: Scroll down.
+				case 'k':
+					//TODO: Scroll up.
+				case 'n':
+					b.NextLink()
+				}
 			}
 		}
+		b.Draw()
+		b.Screen.Show()
 	}
 }
 
@@ -347,7 +596,6 @@ func (o *Input) Draw() {
 	textStyle := defaultStyle
 	if o.ActiveIndex == 0 {
 		textStyle = defaultStyle.Underline(true)
-		// Show that the input is active.
 		NewText(o.Screen, o.X, o.Y+y+2, defaultStyle, ">").Draw()
 	}
 	NewText(o.Screen, o.X+2, o.Y+y+2, textStyle, o.Text).Draw()
@@ -418,6 +666,10 @@ func (o *Input) Focus() (text string, ok bool) {
 				case tcell.KeyRune:
 					o.Text = insert(o.Text, o.CursorIndex, ev.Rune())
 					o.CursorIndex++
+				case tcell.KeyBacktab:
+					o.Up()
+				case tcell.KeyTab:
+					o.Down()
 				case tcell.KeyDown:
 					o.Down()
 				case tcell.KeyEnter:
