@@ -441,6 +441,7 @@ func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, 
 		ActiveLineIndex: -1,
 	}
 	b.Lines, err = NewLineConverter(resp).Lines()
+	b.calculateLinkIndices()
 	return
 }
 
@@ -449,16 +450,16 @@ type Browser struct {
 	URL             *url.URL
 	ResponseHeader  *gemini.Header
 	Lines           []Line
+	LinkLineIndices []int
 	ActiveLineIndex int
 }
 
-func (b *Browser) Links() (indices []int) {
+func (b *Browser) calculateLinkIndices() {
 	for i := 0; i < len(b.Lines); i++ {
 		if _, ok := b.Lines[i].(LinkLine); ok {
-			indices = append(indices, i)
+			b.LinkLineIndices = append(b.LinkLineIndices, i)
 		}
 	}
-	return indices
 }
 
 func (b *Browser) CurrentLink() (u *url.URL, err error) {
@@ -473,47 +474,45 @@ func (b *Browser) CurrentLink() (u *url.URL, err error) {
 }
 
 func (b *Browser) PreviousLink() {
-	ll := b.Links()
-	if len(ll) == 0 {
+	if len(b.LinkLineIndices) == 0 {
 		return
 	}
 	if b.ActiveLineIndex < 0 {
-		b.ActiveLineIndex = ll[len(ll)-1]
+		b.ActiveLineIndex = b.LinkLineIndices[len(b.LinkLineIndices)-1]
 		return
 	}
 	var curIndex, li int
-	for curIndex, li = range ll {
+	for curIndex, li = range b.LinkLineIndices {
 		if li == b.ActiveLineIndex {
 			break
 		}
 	}
 	if curIndex == 0 {
-		b.ActiveLineIndex = ll[len(ll)-1]
+		b.ActiveLineIndex = b.LinkLineIndices[len(b.LinkLineIndices)-1]
 		return
 	}
-	b.ActiveLineIndex = ll[curIndex-1]
+	b.ActiveLineIndex = b.LinkLineIndices[curIndex-1]
 }
 
 func (b *Browser) NextLink() {
-	ll := b.Links()
-	if len(ll) == 0 {
+	if len(b.LinkLineIndices) == 0 {
 		return
 	}
 	if b.ActiveLineIndex < 0 {
-		b.ActiveLineIndex = ll[0]
+		b.ActiveLineIndex = b.LinkLineIndices[0]
 		return
 	}
 	var curIndex, li int
-	for curIndex, li = range ll {
+	for curIndex, li = range b.LinkLineIndices {
 		if li == b.ActiveLineIndex {
 			break
 		}
 	}
-	if curIndex == len(ll)-1 {
-		b.ActiveLineIndex = ll[0]
+	if curIndex == len(b.LinkLineIndices)-1 {
+		b.ActiveLineIndex = b.LinkLineIndices[0]
 		return
 	}
-	b.ActiveLineIndex = ll[curIndex+1]
+	b.ActiveLineIndex = b.LinkLineIndices[curIndex+1]
 }
 
 func (b Browser) Draw() {
