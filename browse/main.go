@@ -36,12 +36,17 @@ func main() {
 	s.Clear()
 	s.Show()
 
-	// Parse the input.
+	// Parse the command-line URL, if provided.
 	urlString := strings.Join(os.Args[1:], "")
 	if urlString == "" {
-		//TODO: Load up a home page.
+		//TODO: Load up a home page based on configuration.
 		urlString = "gemini://localhost"
 	}
+
+	// Create required top-level variables.
+	client := gemini.NewClient()
+	var redirectCount int
+
 	var askForURL, ok bool
 	askForURL = true
 	for {
@@ -52,20 +57,18 @@ func main() {
 				break
 			}
 		}
-		askForURL = !askForURL
 
 		// Check the URL.
 		u, err := url.Parse(urlString)
 		if err != nil {
 			NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Failed to parse address: %q: %v", urlString, err), "OK").Focus()
+			askForURL = true
 			continue
 		}
 
 		// Connect.
-		client := gemini.NewClient()
 		var resp *gemini.Response
 		var certificates []string
-		var redirectCount int
 	out:
 		for {
 			//TODO: Add cert store etc. to the client.
@@ -73,11 +76,11 @@ func main() {
 			if err != nil {
 				switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Request error: %v", err), "Retry", "Cancel").Focus() {
 				case "Retry":
+					askForURL = false
 					continue
 				case "Cancel":
 					break out
 				}
-
 			}
 			if !ok {
 				//TOFU check required.
@@ -85,6 +88,7 @@ func main() {
 				case "Accept":
 					//TODO: Save this in a persistent store.
 					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
+					askForURL = false
 					continue
 				case "Reject":
 					break out
@@ -93,51 +97,76 @@ func main() {
 			break
 		}
 		if !ok || resp == nil {
+			askForURL = true
 			continue
 		}
-		if resp.Header.Code == gemini.CodeClientCertificateRequired {
-			switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("The server is requested a certificate."), "Create temporary", "Cancel").Focus() {
+		if strings.HasPrefix(string(resp.Header.Code), "3") {
+			redirectCount++
+			if redirectCount >= 5 {
+				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Server issued 5 or more redirects, cancelling request."), "OK").Focus()
+				askForURL = true
+				continue
+			}
+			redirectTo, err := url.Parse(resp.Header.Meta)
+			if err != nil {
+				//TODO: Add the ability to go back, once history has been added.
+				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Server returned invalid redirect: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+				askForURL = true
+				continue
+			}
+			//TODO: Check with the user if the redirect is to another domain or protocol.
+			urlString = u.ResolveReference(redirectTo).String()
+			askForURL = false
+			continue
+		}
+		redirectCount = 0
+		if strings.HasPrefix(string(resp.Header.Code), "6") {
+			switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("The server has requested a certificate: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "Create temporary", "Cancel").Focus() {
 			case "Create temporary":
 				//TODO: Add a certificate to the store.
-				break
+				askForURL = false
+				continue
 			case "Cancel":
-				break
+				askForURL = true
+				continue
 			}
 		}
-		if resp.Header.Code == gemini.CodeInput {
+		if strings.HasPrefix(string(resp.Header.Code), "1") {
 			text, ok := NewInput(s, 0, 0, tcell.StyleDefault, resp.Header.Meta, "").Focus()
 			if !ok {
 				continue
 			}
 			// Post the input back.
-			askForURL = false
 			u.RawQuery = url.QueryEscape(text)
 			urlString = u.String()
+			askForURL = false
 			continue
-		}
-		if strings.HasPrefix(string(resp.Header.Code), "3") {
-			//TODO: Handle redirect.
-			redirectCount++
 		}
 		if strings.HasPrefix(string(resp.Header.Code), "2") {
 			b, err := NewBrowser(s, u, resp)
 			if err != nil {
 				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
+				askForURL = true
 				continue
 			}
 			next, err := b.Focus()
 			if err != nil {
 				//TODO: The link was garbage, show the error.
+				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Invalid link: %q\n", err), "OK").Focus()
+				askForURL = true
 				continue
 			}
 			if next != nil {
-				askForURL = false
+				//TODO: Ask the user whether they want to follow it, if it's a non-Gemini link.
 				urlString = next.String()
+				askForURL = false
 				continue
 			}
+			askForURL = true
 			continue
 		}
 		NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Unknown code: %v %s", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+		askForURL = true
 	}
 }
 
@@ -240,13 +269,21 @@ func (t Text) Draw() (x, y int) {
 }
 
 func NewOptions(s tcell.Screen, x, y int, st tcell.Style, msg string, opts ...string) *Options {
+	cancelIndex := -1
+	for i, o := range opts {
+		if o == "Cancel" {
+			cancelIndex = i
+			break
+		}
+	}
 	return &Options{
-		Screen:  s,
-		X:       x,
-		Y:       y,
-		Style:   st,
-		Message: msg,
-		Options: opts,
+		Screen:      s,
+		X:           x,
+		Y:           y,
+		Style:       st,
+		Message:     msg,
+		Options:     opts,
+		CancelIndex: cancelIndex,
 	}
 }
 
@@ -258,6 +295,7 @@ type Options struct {
 	Message     string
 	Options     []string
 	ActiveIndex int
+	CancelIndex int
 }
 
 func (o *Options) Draw() {
@@ -276,14 +314,14 @@ func (o *Options) Draw() {
 
 func (o *Options) Up() {
 	if o.ActiveIndex == 0 {
-		return
+		o.ActiveIndex = len(o.Options) - 1
 	}
 	o.ActiveIndex--
 }
 
 func (o *Options) Down() {
 	if o.ActiveIndex == len(o.Options)-1 {
-		return
+		o.ActiveIndex = 0
 	}
 	o.ActiveIndex++
 }
@@ -297,10 +335,18 @@ func (o *Options) Focus() string {
 			o.Screen.Sync()
 		case *tcell.EventKey:
 			switch ev.Key() {
+			case tcell.KeyBacktab:
+				o.Up()
+			case tcell.KeyTab:
+				o.Down()
 			case tcell.KeyUp:
 				o.Up()
 			case tcell.KeyDown:
 				o.Down()
+			case tcell.KeyEscape:
+				if o.CancelIndex > -1 {
+					return o.Options[o.CancelIndex]
+				}
 			case tcell.KeyEnter:
 				return o.Options[o.ActiveIndex]
 			}
@@ -395,7 +441,7 @@ func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
 	if err != nil {
 		return
 	}
-	if u.IsAbs() || relativeTo == nil {
+	if relativeTo == nil {
 		return
 	}
 	return relativeTo.ResolveReference(u), nil
@@ -617,6 +663,7 @@ func (o *Input) Draw() {
 
 func (o *Input) Up() {
 	if o.ActiveIndex == 0 {
+		o.ActiveIndex = 2
 		return
 	}
 	o.ActiveIndex--
@@ -624,6 +671,7 @@ func (o *Input) Up() {
 
 func (o *Input) Down() {
 	if o.ActiveIndex == 2 {
+		o.ActiveIndex = 0
 		return
 	}
 	o.ActiveIndex++
