@@ -595,7 +595,6 @@ func (o *Input) Draw() {
 
 	textStyle := defaultStyle
 	if o.ActiveIndex == 0 {
-		textStyle = defaultStyle.Underline(true)
 		NewText(o.Screen, o.X, o.Y+y+2, defaultStyle, ">").Draw()
 	}
 	NewText(o.Screen, o.X+2, o.Y+y+2, textStyle, o.Text).Draw()
@@ -685,6 +684,10 @@ func (o *Input) Focus() (text string, ok bool) {
 			o.Screen.Sync()
 		case *tcell.EventKey:
 			switch ev.Key() {
+			case tcell.KeyBacktab:
+				o.Up()
+			case tcell.KeyTab:
+				o.Down()
 			case tcell.KeyUp:
 				o.Up()
 			case tcell.KeyDown:
@@ -699,6 +702,8 @@ func (o *Input) Focus() (text string, ok bool) {
 				case 2:
 					return o.Text, false
 				}
+			case tcell.KeyEscape:
+				return o.Text, false
 			}
 		}
 		o.Draw()
