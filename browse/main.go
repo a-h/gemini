@@ -52,7 +52,7 @@ func main() {
 	for {
 		// Grab the URL input.
 		if askForURL {
-			urlString, ok = NewInput(s, 0, 0, tcell.StyleDefault, "Location:", urlString).Focus()
+			urlString, ok = NewInput(s, "Location:", urlString).Focus()
 			if !ok {
 				break
 			}
@@ -61,7 +61,7 @@ func main() {
 		// Check the URL.
 		u, err := url.Parse(urlString)
 		if err != nil {
-			NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Failed to parse address: %q: %v", urlString, err), "OK").Focus()
+			NewOptions(s, fmt.Sprintf("Failed to parse address: %q: %v", urlString, err), "OK").Focus()
 			askForURL = true
 			continue
 		}
@@ -74,7 +74,7 @@ func main() {
 			//TODO: Add cert store etc. to the client.
 			resp, certificates, _, ok, err = client.RequestURL(u)
 			if err != nil {
-				switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Request error: %v", err), "Retry", "Cancel").Focus() {
+				switch NewOptions(s, fmt.Sprintf("Request error: %v", err), "Retry", "Cancel").Focus() {
 				case "Retry":
 					askForURL = false
 					continue
@@ -84,9 +84,13 @@ func main() {
 			}
 			if !ok {
 				//TOFU check required.
-				switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Accept client certificate?\n  %v", certificates[0]), "Accept", "Reject").Focus() {
-				case "Accept":
+				switch NewOptions(s, fmt.Sprintf("Accept client certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
+				case "Accept (Permanent)":
 					//TODO: Save this in a persistent store.
+					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
+					askForURL = false
+					continue
+				case "Accept (Temporary)":
 					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
 					askForURL = false
 					continue
@@ -103,14 +107,14 @@ func main() {
 		if strings.HasPrefix(string(resp.Header.Code), "3") {
 			redirectCount++
 			if redirectCount >= 5 {
-				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Server issued 5 or more redirects, cancelling request."), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Server issued 5 or more redirects, cancelling request."), "OK").Focus()
 				askForURL = true
 				continue
 			}
 			redirectTo, err := url.Parse(resp.Header.Meta)
 			if err != nil {
 				//TODO: Add the ability to go back, once history has been added.
-				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Server returned invalid redirect: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Server returned invalid redirect: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "OK").Focus()
 				askForURL = true
 				continue
 			}
@@ -121,9 +125,14 @@ func main() {
 		}
 		redirectCount = 0
 		if strings.HasPrefix(string(resp.Header.Code), "6") {
-			switch NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("The server has requested a certificate: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "Create temporary", "Cancel").Focus() {
-			case "Create temporary":
-				//TODO: Add a certificate to the store.
+			msg := fmt.Sprintf("The server has requested a certificate: code %s, meta: %q", resp.Header.Code, resp.Header.Meta)
+			switch NewOptions(s, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus() {
+			case "Create (Permanent)":
+				//TODO: Add a certificate to the permanent store.
+				askForURL = false
+				continue
+			case "Create (Temporary)":
+				//TODO: Add a certificate to the client.
 				askForURL = false
 				continue
 			case "Cancel":
@@ -132,7 +141,7 @@ func main() {
 			}
 		}
 		if strings.HasPrefix(string(resp.Header.Code), "1") {
-			text, ok := NewInput(s, 0, 0, tcell.StyleDefault, resp.Header.Meta, "").Focus()
+			text, ok := NewInput(s, resp.Header.Meta, "").Focus()
 			if !ok {
 				continue
 			}
@@ -145,19 +154,19 @@ func main() {
 		if strings.HasPrefix(string(resp.Header.Code), "2") {
 			b, err := NewBrowser(s, u, resp)
 			if err != nil {
-				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
 				askForURL = true
 				continue
 			}
 			next, err := b.Focus()
 			if err != nil {
 				//TODO: The link was garbage, show the error.
-				NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Invalid link: %q\n", err), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Invalid link: %v\n", err), "OK").Focus()
 				askForURL = true
 				continue
 			}
 			if next != nil {
-				//TODO: Ask the user whether they want to follow it, if it's a non-Gemini link.
+				//TODO: Ask the user whether they want to follow it, if it's a non-Gemini link, or goes to a different domain.
 				urlString = next.String()
 				askForURL = false
 				continue
@@ -165,7 +174,7 @@ func main() {
 			askForURL = true
 			continue
 		}
-		NewOptions(s, 0, 0, tcell.StyleDefault, fmt.Sprintf("Unknown code: %v %s", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+		NewOptions(s, fmt.Sprintf("Unknown code: %v %s", resp.Header.Code, resp.Header.Meta), "OK").Focus()
 		askForURL = true
 	}
 }
@@ -217,12 +226,12 @@ func flowProcessor(s string, maxWidth int, out func(string)) {
 	out(buf.String())
 }
 
-func NewText(s tcell.Screen, x, y int, st tcell.Style, text string) Text {
-	return Text{
+func NewText(s tcell.Screen, text string) *Text {
+	return &Text{
 		Screen: s,
-		X:      x,
-		Y:      y,
-		Style:  st,
+		X:      0,
+		Y:      0,
+		Style:  tcell.StyleDefault,
 		Text:   text,
 	}
 }
@@ -233,6 +242,17 @@ type Text struct {
 	Y      int
 	Style  tcell.Style
 	Text   string
+}
+
+func (t *Text) WithOffset(x, y int) *Text {
+	t.X = x
+	t.Y = y
+	return t
+}
+
+func (t *Text) WithStyle(st tcell.Style) *Text {
+	t.Style = st
+	return t
 }
 
 func (t Text) Draw() (x, y int) {
@@ -268,7 +288,7 @@ func (t Text) Draw() (x, y int) {
 	return requiredMaxWidth, y
 }
 
-func NewOptions(s tcell.Screen, x, y int, st tcell.Style, msg string, opts ...string) *Options {
+func NewOptions(s tcell.Screen, msg string, opts ...string) *Options {
 	cancelIndex := -1
 	for i, o := range opts {
 		if o == "Cancel" {
@@ -278,9 +298,9 @@ func NewOptions(s tcell.Screen, x, y int, st tcell.Style, msg string, opts ...st
 	}
 	return &Options{
 		Screen:      s,
-		X:           x,
-		Y:           y,
-		Style:       st,
+		X:           0,
+		Y:           0,
+		Style:       tcell.StyleDefault,
 		Message:     msg,
 		Options:     opts,
 		CancelIndex: cancelIndex,
@@ -300,21 +320,21 @@ type Options struct {
 
 func (o *Options) Draw() {
 	o.Screen.Clear()
-	t := NewText(o.Screen, 0, 0, tcell.StyleDefault, o.Message)
+	t := NewText(o.Screen, o.Message)
 	_, y := t.Draw()
 	for i, oo := range o.Options {
 		style := tcell.StyleDefault
 		if i == o.ActiveIndex {
 			style = tcell.StyleDefault.Background(tcell.ColorLightGray)
 		}
-		t := NewText(o.Screen, 1, i+y+2, style, fmt.Sprintf("[ %s ]", oo))
-		t.Draw()
+		NewText(o.Screen, fmt.Sprintf("[ %s ]", oo)).WithOffset(1, i+y+2).WithStyle(style).Draw()
 	}
 }
 
 func (o *Options) Up() {
 	if o.ActiveIndex == 0 {
 		o.ActiveIndex = len(o.Options) - 1
+		return
 	}
 	o.ActiveIndex--
 }
@@ -322,6 +342,7 @@ func (o *Options) Up() {
 func (o *Options) Down() {
 	if o.ActiveIndex == len(o.Options)-1 {
 		o.ActiveIndex = 0
+		return
 	}
 	o.ActiveIndex++
 }
@@ -418,7 +439,7 @@ type TextLine struct {
 }
 
 func (l TextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, atX, atY, tcell.StyleDefault, l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).Draw()
 }
 
 type PreformattedTextLine struct {
@@ -426,7 +447,7 @@ type PreformattedTextLine struct {
 }
 
 func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, atX, atY, tcell.StyleDefault, l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).Draw()
 }
 
 type LinkLine struct {
@@ -452,7 +473,7 @@ func (l LinkLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y in
 	if highlighted {
 		ls = ls.Underline(true)
 	}
-	return NewText(to, atX+2, atY, ls, l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithStyle(ls).Draw()
 }
 
 type HeadingLine struct {
@@ -460,7 +481,7 @@ type HeadingLine struct {
 }
 
 func (l HeadingLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, atX, atY, tcell.StyleDefault.Foreground(tcell.ColorGreen), l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorGreen)).Draw()
 }
 
 type UnorderedListItemLine struct {
@@ -468,7 +489,7 @@ type UnorderedListItemLine struct {
 }
 
 func (l UnorderedListItemLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, atX+2, atY, tcell.StyleDefault, l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).Draw()
 }
 
 type QuoteLine struct {
@@ -476,7 +497,7 @@ type QuoteLine struct {
 }
 
 func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, atX+2, atY, tcell.StyleDefault.Foreground(tcell.ColorLightGrey), l.Text).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorLightGrey)).Draw()
 }
 
 func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
@@ -607,12 +628,12 @@ func (b Browser) Focus() (next *url.URL, err error) {
 	}
 }
 
-func NewInput(s tcell.Screen, x, y int, st tcell.Style, msg, text string) *Input {
+func NewInput(s tcell.Screen, msg, text string) *Input {
 	return &Input{
 		Screen:      s,
-		X:           x,
-		Y:           y,
-		Style:       st,
+		X:           0,
+		Y:           0,
+		Style:       tcell.StyleDefault,
 		Message:     msg,
 		Text:        text,
 		CursorIndex: len(text),
@@ -632,17 +653,16 @@ type Input struct {
 
 func (o *Input) Draw() {
 	o.Screen.Clear()
-	t := NewText(o.Screen, o.X, o.Y, o.Style, o.Message)
-	_, y := t.Draw()
+	_, y := NewText(o.Screen, o.Message).WithOffset(o.X, o.Y).WithStyle(o.Style).Draw()
 
 	defaultStyle := tcell.StyleDefault
 	activeStyle := tcell.StyleDefault.Background(tcell.ColorLightGray)
 
 	textStyle := defaultStyle
 	if o.ActiveIndex == 0 {
-		NewText(o.Screen, o.X, o.Y+y+2, defaultStyle, ">").Draw()
+		NewText(o.Screen, ">").WithOffset(o.X, o.Y+y+2).WithStyle(defaultStyle).Draw()
 	}
-	NewText(o.Screen, o.X+2, o.Y+y+2, textStyle, o.Text).Draw()
+	NewText(o.Screen, o.Text).WithOffset(o.X+2, o.Y+y+2).WithStyle(textStyle).Draw()
 	if o.ActiveIndex == 0 {
 		o.Screen.ShowCursor(o.X+2+o.CursorIndex, o.Y+y+2)
 	} else {
@@ -653,12 +673,12 @@ func (o *Input) Draw() {
 	if o.ActiveIndex == 1 {
 		okStyle = activeStyle
 	}
-	NewText(o.Screen, 1, o.Y+y+4, okStyle, "[ OK ]").Draw()
+	NewText(o.Screen, "[ OK ]").WithOffset(1, o.Y+y+4).WithStyle(okStyle).Draw()
 	cancelStyle := defaultStyle
 	if o.ActiveIndex == 2 {
 		cancelStyle = activeStyle
 	}
-	NewText(o.Screen, 1, o.Y+y+5, cancelStyle, "[ Cancel ]").Draw()
+	NewText(o.Screen, "[ Cancel ]").WithOffset(1, o.Y+y+5).WithStyle(cancelStyle).Draw()
 }
 
 func (o *Input) Up() {
