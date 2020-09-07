@@ -152,11 +152,13 @@ func serve(args []string) {
 		os.Exit(1)
 	}
 	h := gemini.FileSystemHandler(gemini.Dir(*pathFlag))
-	dh, err := gemini.NewDomainHandler(*domainFlag, *certFileFlag, *keyFileFlag, h)
+
+	cert, err := tls.LoadX509KeyPair(*certFileFlag, *keyFileFlag)
 	if err != nil {
-		fmt.Printf("error: failed to create handler: %v\n", err)
+		fmt.Printf("error: failed to load certificates: %v\n", err)
 		os.Exit(1)
 	}
+	dh := gemini.NewDomainHandler(*domainFlag, cert, h)
 	ctx := context.Background()
 	domainToHandler := map[string]*gemini.DomainHandler{
 		*domainFlag: dh,

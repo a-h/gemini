@@ -2,14 +2,17 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/a-h/gemini"
+	"github.com/a-h/gemini/cert"
 	"github.com/gdamore/tcell"
 	"github.com/mattn/go-runewidth"
 )
@@ -132,7 +135,15 @@ func main() {
 				askForURL = false
 				continue
 			case "Create (Temporary)":
-				//TODO: Add a certificate to the client.
+				// Add a certificate to the client.
+				cert, key, _ := cert.Generate("", "", "", time.Hour*24)
+				keyPair, err := tls.X509KeyPair(cert, key)
+				if err != nil {
+					NewOptions(s, fmt.Sprintf("Failed to create certificate: %v", err), "OK").Focus()
+					askForURL = true
+					continue
+				}
+				client.AddCertificateForURLPrefix(u.String(), keyPair)
 				askForURL = false
 				continue
 			case "Cancel":

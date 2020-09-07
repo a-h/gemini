@@ -170,7 +170,7 @@ func (client *Client) RequestNoTLS(u *url.URL) (resp *Response, err error) {
 	if port == "" {
 		port = "1965"
 	}
-	conn, err := net.Dial("tcp", u.Host+":"+port)
+	conn, err := net.Dial("tcp", u.Hostname()+":"+port)
 	if err != nil {
 		err = fmt.Errorf("gemini: error connecting: %w", err)
 		return
@@ -191,7 +191,7 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 	if port == "" {
 		port = "1965"
 	}
-	conn, err := tls.Dial("tcp", u.Host+":"+port, config)
+	conn, err := tls.Dial("tcp", u.Hostname()+":"+port, config)
 	if err != nil {
 		err = fmt.Errorf("gemini: error connecting: %w", err)
 		return

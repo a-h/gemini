@@ -34,11 +34,11 @@ func main() {
 
 	// Set up the domain handlers.
 	ctx := context.Background()
-	a, err := gemini.NewDomainHandler("a.gemini", "a.crt", "a.key", routerA)
+	a, err := gemini.NewDomainHandlerFromFiles("a.gemini", "a.crt", "a.key", routerA)
 	if err != nil {
 		log.Fatal("error creating domain handler A:", err)
 	}
-	b, err := gemini.NewDomainHandler("b.gemini", "b.crt", "b.key", handlerB)
+	b, err := gemini.NewDomainHandlerFromFiles("b.gemini", "b.crt", "b.key", handlerB)
 	if err != nil {
 		log.Fatal("error creating domain handler B:", err)
 	}
