@@ -69,7 +69,7 @@ func readHeader(r io.Reader) (h Header, err error) {
 		err = ErrInvalidCode
 		return
 	}
-	if len(h.Meta) > 1 {
+	if len(parts) > 1 {
 		h.Meta = parts[1]
 		if !isValidMeta(h.Meta) {
 			err = ErrInvalidMeta
