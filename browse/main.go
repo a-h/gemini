@@ -15,6 +15,7 @@ import (
 	"github.com/a-h/gemini/cert"
 	"github.com/gdamore/tcell"
 	"github.com/mattn/go-runewidth"
+	"github.com/pkg/browser"
 )
 
 func main() {
@@ -116,13 +117,27 @@ func main() {
 			}
 			redirectTo, err := url.Parse(resp.Header.Meta)
 			if err != nil {
-				//TODO: Add the ability to go back, once history has been added.
 				NewOptions(s, fmt.Sprintf("Server returned invalid redirect: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "OK").Focus()
-				askForURL = true
+				askForURL = false
 				continue
 			}
-			//TODO: Check with the user if the redirect is to another domain or protocol.
-			urlString = u.ResolveReference(redirectTo).String()
+			// Check with the user if the redirect is to another domain or protocol.
+			redirectTo = u.ResolveReference(redirectTo)
+			if redirectTo.Scheme != "gemini" {
+				if open := NewOptions(s, fmt.Sprintf("Follow non-gemini redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "Yes" {
+					browser.OpenURL(redirectTo.String())
+				}
+				askForURL = false
+				continue
+			}
+			if redirectTo.Host != u.Host {
+				if open := NewOptions(s, fmt.Sprintf("Follow cross-domain redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "No" {
+					// Go back.
+					askForURL = false
+					continue
+				}
+			}
+			urlString = redirectTo.String()
 			askForURL = false
 			continue
 		}
@@ -183,19 +198,18 @@ func main() {
 				// User has selected a link.
 				if next.Scheme != "gemini" {
 					if open := NewOptions(s, fmt.Sprintf("Open non-gemini link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
-						//TODO: Open with the appropriate browser.
-						urlString = next.String()
-						askForURL = false
-						continue
+						browser.OpenURL(next.String())
 					}
+					askForURL = false
+					continue
 				}
 				if next.Host != u.Host {
-					if open := NewOptions(s, fmt.Sprintf("Follow cross-domain link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
-						urlString = next.String()
+					if open := NewOptions(s, fmt.Sprintf("Open cross-domain link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "No" {
 						askForURL = false
 						continue
 					}
 				}
+				urlString = next.String()
 				askForURL = false
 				continue
 			}
@@ -265,11 +279,12 @@ func NewText(s tcell.Screen, text string) *Text {
 }
 
 type Text struct {
-	Screen tcell.Screen
-	X      int
-	Y      int
-	Style  tcell.Style
-	Text   string
+	Screen   tcell.Screen
+	X        int
+	Y        int
+	MaxWidth int
+	Style    tcell.Style
+	Text     string
 }
 
 func (t *Text) WithOffset(x, y int) *Text {
@@ -278,14 +293,22 @@ func (t *Text) WithOffset(x, y int) *Text {
 	return t
 }
 
+func (t *Text) WithMaxWidth(x int) *Text {
+	t.MaxWidth = x
+	return t
+}
+
 func (t *Text) WithStyle(st tcell.Style) *Text {
 	t.Style = st
 	return t
 }
 
-func (t Text) Draw() (x, y int) {
+func (t *Text) Draw() (x, y int) {
 	maxX, maxY := t.Screen.Size()
 	maxWidth := maxX - t.X
+	if t.MaxWidth > 0 && maxWidth > t.MaxWidth {
+		maxWidth = t.MaxWidth
+	}
 	if maxWidth < 0 {
 		// It's off screen, so there's nothing to display.
 		return
@@ -405,14 +428,16 @@ func (o *Options) Focus() string {
 	}
 }
 
-func NewLineConverter(resp *gemini.Response) *LineConverter {
+func NewLineConverter(resp *gemini.Response, width int) *LineConverter {
 	return &LineConverter{
 		Response: resp,
+		MaxWidth: width,
 	}
 }
 
 type LineConverter struct {
 	Response     *gemini.Response
+	MaxWidth     int
 	preFormatted bool
 }
 
@@ -422,21 +447,22 @@ func (lc *LineConverter) process(s string) (l Line, isVisualLine bool) {
 		return l, false
 	}
 	if lc.preFormatted {
+		// PreformattedTextLine doesn't have a max width.
 		return PreformattedTextLine{Text: s}, true
 	}
 	if strings.HasPrefix(s, "=>") {
-		return LinkLine{Text: s}, true
+		return LinkLine{Text: s, MaxWidth: lc.MaxWidth}, true
 	}
 	if strings.HasPrefix(s, "#") {
-		return HeadingLine{Text: s}, true
+		return HeadingLine{Text: s, MaxWidth: lc.MaxWidth}, true
 	}
 	if strings.HasPrefix(s, "* ") {
-		return UnorderedListItemLine{Text: s}, true
+		return UnorderedListItemLine{Text: s, MaxWidth: lc.MaxWidth}, true
 	}
 	if strings.HasPrefix(s, ">") {
-		return QuoteLine{Text: s}, true
+		return QuoteLine{Text: s, MaxWidth: lc.MaxWidth}, true
 	}
-	return TextLine{Text: s}, true
+	return TextLine{Text: s, MaxWidth: lc.MaxWidth}, true
 }
 
 func (lc *LineConverter) Lines() (lines []Line, err error) {
@@ -463,11 +489,12 @@ type Line interface {
 }
 
 type TextLine struct {
-	Text string
+	Text     string
+	MaxWidth int
 }
 
 func (l TextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX, atY).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).WithMaxWidth(l.MaxWidth).Draw()
 }
 
 type PreformattedTextLine struct {
@@ -479,7 +506,8 @@ func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bo
 }
 
 type LinkLine struct {
-	Text string
+	Text     string
+	MaxWidth int
 }
 
 func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
@@ -501,31 +529,34 @@ func (l LinkLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y in
 	if highlighted {
 		ls = ls.Underline(true)
 	}
-	return NewText(to, l.Text).WithOffset(atX+2, atY).WithStyle(ls).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(ls).Draw()
 }
 
 type HeadingLine struct {
-	Text string
+	Text     string
+	MaxWidth int
 }
 
 func (l HeadingLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX, atY).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorGreen)).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).WithMaxWidth(l.MaxWidth).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorGreen)).Draw()
 }
 
 type UnorderedListItemLine struct {
-	Text string
+	Text     string
+	MaxWidth int
 }
 
 func (l UnorderedListItemLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX+2, atY).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).Draw()
 }
 
 type QuoteLine struct {
-	Text string
+	Text     string
+	MaxWidth int
 }
 
 func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX+2, atY).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorLightGrey)).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorLightGrey)).Draw()
 }
 
 func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
@@ -535,7 +566,12 @@ func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, 
 		ResponseHeader:  resp.Header,
 		ActiveLineIndex: -1,
 	}
-	b.Lines, err = NewLineConverter(resp).Lines()
+	maxWidth, _ := s.Size()
+	//TODO: Configure the max width.
+	if maxWidth > 80 {
+		maxWidth = 80
+	}
+	b.Lines, err = NewLineConverter(resp, maxWidth).Lines()
 	b.calculateLinkIndices()
 	return
 }
@@ -616,6 +652,7 @@ func (b Browser) Draw() {
 	var y int
 	for lineIndex, line := range b.Lines {
 		highlighted := lineIndex == b.ActiveLineIndex
+		//TODO: Be able to set the max width.
 		_, yy := line.Draw(b.Screen, 0, y, highlighted)
 		y = yy + 1
 	}
