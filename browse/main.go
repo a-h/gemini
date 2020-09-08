@@ -128,7 +128,11 @@ func main() {
 		}
 		redirectCount = 0
 		if strings.HasPrefix(string(resp.Header.Code), "6") {
-			msg := fmt.Sprintf("The server has requested a certificate: code %s, meta: %q", resp.Header.Code, resp.Header.Meta)
+			var meta string
+			if resp.Header.Meta != "" {
+				meta = fmt.Sprintf("(%s)", resp.Header.Meta)
+			}
+			msg := fmt.Sprintf("The server has requested a certificate.\n\nCode: %s %s", resp.Header.Code, meta)
 			switch NewOptions(s, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus() {
 			case "Create (Permanent)":
 				//TODO: Add a certificate to the permanent store.
@@ -171,14 +175,27 @@ func main() {
 			}
 			next, err := b.Focus()
 			if err != nil {
-				//TODO: The link was garbage, show the error.
 				NewOptions(s, fmt.Sprintf("Invalid link: %v\n", err), "OK").Focus()
 				askForURL = true
 				continue
 			}
 			if next != nil {
-				//TODO: Ask the user whether they want to follow it, if it's a non-Gemini link, or goes to a different domain.
-				urlString = next.String()
+				// User has selected a link.
+				if next.Scheme != "gemini" {
+					if open := NewOptions(s, fmt.Sprintf("Open non-gemini link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
+						//TODO: Open with the appropriate browser.
+						urlString = next.String()
+						askForURL = false
+						continue
+					}
+				}
+				if next.Host != u.Host {
+					if open := NewOptions(s, fmt.Sprintf("Follow cross-domain link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
+						urlString = next.String()
+						askForURL = false
+						continue
+					}
+				}
 				askForURL = false
 				continue
 			}

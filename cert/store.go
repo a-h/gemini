@@ -27,8 +27,9 @@ func Generate(organization, commonName, hosts string, duration time.Duration) (c
 	// KeyUsage bits set in the x509.Certificate template
 	keyUsage := x509.KeyUsageDigitalSignature
 
+	// Give some flexibility to handle clock adjustments.
 	notBefore := time.Now().Add(time.Hour * -24)
-	notAfter := notBefore.Add(duration)
+	notAfter := time.Now().Add(duration)
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
