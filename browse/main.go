@@ -297,22 +297,15 @@ func (t *Text) WithStyle(st tcell.Style) *Text {
 }
 
 func (t *Text) Draw() (x, y int) {
-	maxX, maxY := t.Screen.Size()
+	maxX, _ := t.Screen.Size()
 	maxWidth := maxX - t.X
 	if t.MaxWidth > 0 && maxWidth > t.MaxWidth {
 		maxWidth = t.MaxWidth
-	}
-	if maxWidth < 0 {
-		// It's off screen, so there's nothing to display.
-		return
 	}
 	lines := flow(t.Text, maxWidth)
 	var requiredMaxWidth int
 	for lineIndex := 0; lineIndex < len(lines); lineIndex++ {
 		y = t.Y + lineIndex
-		if y > maxY {
-			break
-		}
 		x = t.X
 		for _, c := range lines[lineIndex] {
 			var comb []rune
@@ -495,6 +488,7 @@ type PreformattedTextLine struct {
 }
 
 func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
+	//TODO: Ensure preformatted lines don't wrap like this does.
 	return NewText(to, l.Text).WithOffset(atX, atY).Draw()
 }
 
@@ -574,8 +568,19 @@ type Browser struct {
 	URL             *url.URL
 	ResponseHeader  *gemini.Header
 	Lines           []Line
+	ScrollY         int
 	LinkLineIndices []int
 	ActiveLineIndex int
+}
+
+func (b *Browser) ScrollUp() {
+	if b.ScrollY < 0 {
+		b.ScrollY++
+	}
+}
+
+func (b *Browser) ScrollDown() {
+	b.ScrollY--
 }
 
 func (b *Browser) calculateLinkIndices() {
@@ -641,17 +646,16 @@ func (b *Browser) NextLink() {
 
 func (b Browser) Draw() {
 	b.Screen.Clear()
-	//TODO: Handle scrolling.
-	var y int
+	//TODO: Handle X scrolling.
+	y := b.ScrollY
 	for lineIndex, line := range b.Lines {
 		highlighted := lineIndex == b.ActiveLineIndex
-		//TODO: Be able to set the max width.
 		_, yy := line.Draw(b.Screen, 0, y, highlighted)
 		y = yy + 1
 	}
 }
 
-func (b Browser) Focus() (next *url.URL, err error) {
+func (b *Browser) Focus() (next *url.URL, err error) {
 	b.Draw()
 	b.Screen.Show()
 	for {
@@ -670,12 +674,17 @@ func (b Browser) Focus() (next *url.URL, err error) {
 				b.PreviousLink()
 			case tcell.KeyEnter:
 				return b.CurrentLink()
+			case tcell.KeyUp:
+				b.ScrollUp()
+			case tcell.KeyDown:
+				b.ScrollDown()
+				//TODO: Add page scrolling?
 			case tcell.KeyRune:
 				switch ev.Rune() {
 				case 'j':
-					//TODO: Scroll down.
+					b.ScrollDown()
 				case 'k':
-					//TODO: Scroll up.
+					b.ScrollUp()
 				case 'n':
 					b.NextLink()
 				}
