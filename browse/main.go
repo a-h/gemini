@@ -195,19 +195,12 @@ func main() {
 				continue
 			}
 			if next != nil {
-				// User has selected a link.
 				if next.Scheme != "gemini" {
-					if open := NewOptions(s, fmt.Sprintf("Open non-gemini link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
+					if open := NewOptions(s, fmt.Sprintf("Open in browser?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
 						browser.OpenURL(next.String())
 					}
 					askForURL = false
 					continue
-				}
-				if next.Host != u.Host {
-					if open := NewOptions(s, fmt.Sprintf("Open cross-domain link?\n\n %v", next.String()), "Yes", "No").Focus(); open == "No" {
-						askForURL = false
-						continue
-					}
 				}
 				urlString = next.String()
 				askForURL = false
@@ -776,9 +769,9 @@ func (o *Input) Focus() (text string, ok bool) {
 			case *tcell.EventKey:
 				switch ev.Key() {
 				case tcell.KeyBackspace:
-					if tl := len(o.Text); tl > 0 {
+					if o.CursorIndex > 0 {
 						o.CursorIndex--
-						o.Text = o.Text[0 : tl-1]
+						o.Text = cut(o.Text, o.CursorIndex)
 					}
 				case tcell.KeyLeft:
 					if o.CursorIndex > 0 {
