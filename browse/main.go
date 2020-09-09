@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -15,10 +18,91 @@ import (
 	"github.com/a-h/gemini/cert"
 	"github.com/gdamore/tcell"
 	"github.com/mattn/go-runewidth"
+	"github.com/natefinch/atomic"
 	"github.com/pkg/browser"
 )
 
+type Config struct {
+	Home             string
+	Width            int
+	HostCertificates map[string]string
+}
+
+func (c *Config) configFileName() string {
+	home, _ := os.UserHomeDir()
+	return path.Join(home, ".min/config.ini")
+}
+
+func (c *Config) Save() error {
+	b := new(bytes.Buffer)
+	fmt.Fprintf(b, "home=%v\n", c.Home)
+	fmt.Fprintf(b, "width=%v\n", c.Width)
+	for host, cert := range c.HostCertificates {
+		fmt.Fprintf(b, "hostcert/%v=%v\n", host, cert)
+	}
+	fn := c.configFileName()
+	os.MkdirAll(path.Dir(fn), os.ModePerm)
+	return atomic.WriteFile(fn, b)
+}
+
+func NewConfig() (c *Config, err error) {
+	c = &Config{
+		Home:             "gemini://gus.guru",
+		Width:            80,
+		HostCertificates: map[string]string{},
+	}
+	lines, err := readLines(c.configFileName())
+	if err != nil {
+		return
+	}
+	for _, l := range lines {
+		kv := strings.SplitN(l, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		k, v := strings.ToLower(strings.TrimSpace(kv[0])), strings.TrimSpace(kv[1])
+		switch k {
+		case "home":
+			c.Home = v
+		case "width":
+			w, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return c, err
+			}
+			c.Width = int(w)
+		}
+		if strings.HasPrefix(k, "hostcert/") {
+			host := strings.TrimPrefix(k, "hostcert/")
+			c.HostCertificates[host] = v
+		}
+	}
+	return
+}
+
+func readLines(fn string) (lines []string, err error) {
+	f, err := os.Open(fn)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err = nil
+		}
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	err = scanner.Err()
+	return
+}
+
 func main() {
+	conf, err := NewConfig()
+	if err != nil {
+		fmt.Println("Error loading config:", err)
+		os.Exit(1)
+	}
+
 	// Create a screen.
 	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
 	s, err := tcell.NewScreen()
@@ -26,8 +110,7 @@ func main() {
 		fmt.Println("Error creating screen:", err)
 		os.Exit(1)
 	}
-	err = s.Init()
-	if err != nil {
+	if err = s.Init(); err != nil {
 		fmt.Println("Error initializing screen:", err)
 		os.Exit(1)
 	}
@@ -43,12 +126,14 @@ func main() {
 	// Parse the command-line URL, if provided.
 	urlString := strings.Join(os.Args[1:], "")
 	if urlString == "" {
-		//TODO: Load up a home page based on configuration.
-		urlString = "gemini://localhost"
+		urlString = conf.Home
 	}
 
 	// Create required top-level variables.
 	client := gemini.NewClient()
+	for host, cert := range conf.HostCertificates {
+		client.AddAlllowedCertificateForHost(host, cert)
+	}
 	var redirectCount int
 
 	var askForURL, ok bool
@@ -75,7 +160,6 @@ func main() {
 		var certificates []string
 	out:
 		for {
-			//TODO: Add cert store etc. to the client.
 			resp, certificates, _, ok, err = client.RequestURL(u)
 			if err != nil {
 				switch NewOptions(s, fmt.Sprintf("Request error: %v", err), "Retry", "Cancel").Focus() {
@@ -90,7 +174,8 @@ func main() {
 				//TOFU check required.
 				switch NewOptions(s, fmt.Sprintf("Accept client certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
 				case "Accept (Permanent)":
-					//TODO: Save this in a persistent store.
+					conf.HostCertificates[u.Host] = certificates[0]
+					conf.Save()
 					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
 					askForURL = false
 					continue
@@ -121,7 +206,7 @@ func main() {
 				askForURL = false
 				continue
 			}
-			// Check with the user if the redirect is to another domain or protocol.
+			// Check with the user if the redirect is to another protocol or domain.
 			redirectTo = u.ResolveReference(redirectTo)
 			if redirectTo.Scheme != "gemini" {
 				if open := NewOptions(s, fmt.Sprintf("Follow non-gemini redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "Yes" {
@@ -132,7 +217,6 @@ func main() {
 			}
 			if redirectTo.Host != u.Host {
 				if open := NewOptions(s, fmt.Sprintf("Follow cross-domain redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "No" {
-					// Go back.
 					askForURL = false
 					continue
 				}
@@ -182,7 +266,7 @@ func main() {
 			continue
 		}
 		if strings.HasPrefix(string(resp.Header.Code), "2") {
-			b, err := NewBrowser(s, u, resp)
+			b, err := NewBrowser(s, conf.Width, u, resp)
 			if err != nil {
 				NewOptions(s, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
 				askForURL = true
@@ -335,8 +419,6 @@ func NewOptions(s tcell.Screen, msg string, opts ...string) *Options {
 	}
 	return &Options{
 		Screen:      s,
-		X:           0,
-		Y:           0,
 		Style:       tcell.StyleDefault,
 		Message:     msg,
 		Options:     opts,
@@ -433,7 +515,6 @@ func (lc *LineConverter) process(s string) (l Line, isVisualLine bool) {
 		return l, false
 	}
 	if lc.preFormatted {
-		// PreformattedTextLine doesn't have a max width.
 		return PreformattedTextLine{Text: s}, true
 	}
 	if strings.HasPrefix(s, "=>") {
@@ -496,7 +577,6 @@ func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bo
 			c = ' '
 			w = 1
 		}
-		//TODO: Be able to style this via config?
 		to.SetContent(atX, atY, c, comb, tcell.StyleDefault)
 		atX += w
 	}
@@ -557,7 +637,7 @@ func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y i
 	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorLightGrey)).Draw()
 }
 
-func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
+func NewBrowser(s tcell.Screen, w int, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
 	b = &Browser{
 		Screen:          s,
 		URL:             u,
@@ -565,9 +645,8 @@ func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, 
 		ActiveLineIndex: -1,
 	}
 	maxWidth, _ := s.Size()
-	//TODO: Configure the max width of non-preformatted lines.
-	if maxWidth > 80 {
-		maxWidth = 80
+	if maxWidth > w {
+		maxWidth = w
 	}
 	b.Lines, err = NewLineConverter(resp, maxWidth).Lines()
 	b.calculateLinkIndices()

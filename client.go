@@ -100,10 +100,20 @@ func readUntilCrLf(src io.Reader, maxLength int) (output []byte, ok bool, err er
 	return
 }
 
+var validStart map[byte]bool = map[byte]bool{
+	'1': true,
+	'2': true,
+	'3': true,
+	'4': true,
+	'5': true,
+	'6': true,
+}
+
 func isValidCode(code Code) bool {
-	return len(code) == 2 &&
-		(code[0] >= 49 && code[0] <= 54) &&
-		(code[1] >= 48 && code[1] <= 57)
+	if len(code) == 0 {
+		return false
+	}
+	return validStart[code[0]]
 }
 
 func isValidMeta(m string) bool {
