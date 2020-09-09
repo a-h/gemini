@@ -688,7 +688,7 @@ func (b *Browser) Draw() {
 	// Calculate the maximum scroll area.
 	w, h := b.Screen.Size()
 	b.MinScrollX = (maxX * -1) + b.ScrollX + w
-	b.MinScrollY = (y * -1) + b.ScrollY + h - 1
+	b.MinScrollY = (y * -1) + b.ScrollY + h + 1
 }
 
 func (b *Browser) Focus() (next *url.URL, err error) {
@@ -710,6 +710,10 @@ func (b *Browser) Focus() (next *url.URL, err error) {
 				b.PreviousLink()
 			case tcell.KeyEnter:
 				return b.CurrentLink()
+			case tcell.KeyHome:
+				b.ScrollX = 0
+			case tcell.KeyEnd:
+				b.ScrollX = b.MinScrollX
 			case tcell.KeyLeft:
 				b.ScrollLeft()
 			case tcell.KeyUp:
@@ -721,6 +725,10 @@ func (b *Browser) Focus() (next *url.URL, err error) {
 				b.ScrollRight()
 			case tcell.KeyRune:
 				switch ev.Rune() {
+				case 'g':
+					b.ScrollY = 0
+				case 'G':
+					b.ScrollY = b.MinScrollY
 				case 'h':
 					b.ScrollLeft()
 				case 'j':
