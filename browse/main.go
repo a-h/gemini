@@ -488,8 +488,19 @@ type PreformattedTextLine struct {
 }
 
 func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	//TODO: Ensure preformatted lines don't wrap like this does.
-	return NewText(to, l.Text).WithOffset(atX, atY).Draw()
+	for _, c := range l.Text {
+		var comb []rune
+		w := runewidth.RuneWidth(c)
+		if w == 0 {
+			comb = []rune{c}
+			c = ' '
+			w = 1
+		}
+		//TODO: Be able to style this via config?
+		to.SetContent(atX, atY, c, comb, tcell.StyleDefault)
+		atX += w
+	}
+	return atX, atY
 }
 
 type LinkLine struct {
@@ -554,7 +565,7 @@ func NewBrowser(s tcell.Screen, u *url.URL, resp *gemini.Response) (b *Browser, 
 		ActiveLineIndex: -1,
 	}
 	maxWidth, _ := s.Size()
-	//TODO: Configure the max width.
+	//TODO: Configure the max width of non-preformatted lines.
 	if maxWidth > 80 {
 		maxWidth = 80
 	}
@@ -568,9 +579,24 @@ type Browser struct {
 	URL             *url.URL
 	ResponseHeader  *gemini.Header
 	Lines           []Line
+	ScrollX         int
+	MinScrollX      int
 	ScrollY         int
+	MinScrollY      int
 	LinkLineIndices []int
 	ActiveLineIndex int
+}
+
+func (b *Browser) ScrollLeft() {
+	if b.ScrollX < 0 {
+		b.ScrollX++
+	}
+}
+
+func (b *Browser) ScrollRight() {
+	if b.ScrollX > b.MinScrollX {
+		b.ScrollX--
+	}
 }
 
 func (b *Browser) ScrollUp() {
@@ -580,7 +606,9 @@ func (b *Browser) ScrollUp() {
 }
 
 func (b *Browser) ScrollDown() {
-	b.ScrollY--
+	if b.ScrollY > b.MinScrollY {
+		b.ScrollY--
+	}
 }
 
 func (b *Browser) calculateLinkIndices() {
@@ -644,15 +672,23 @@ func (b *Browser) NextLink() {
 	b.ActiveLineIndex = b.LinkLineIndices[curIndex+1]
 }
 
-func (b Browser) Draw() {
+func (b *Browser) Draw() {
 	b.Screen.Clear()
-	//TODO: Handle X scrolling.
+	var maxX int
+	x := b.ScrollX
 	y := b.ScrollY
 	for lineIndex, line := range b.Lines {
 		highlighted := lineIndex == b.ActiveLineIndex
-		_, yy := line.Draw(b.Screen, 0, y, highlighted)
+		xx, yy := line.Draw(b.Screen, x, y, highlighted)
+		if xx > maxX {
+			maxX = xx
+		}
 		y = yy + 1
 	}
+	// Calculate the maximum scroll area.
+	w, h := b.Screen.Size()
+	b.MinScrollX = (maxX * -1) + b.ScrollX + w
+	b.MinScrollY = (y * -1) + b.ScrollY + h - 1
 }
 
 func (b *Browser) Focus() (next *url.URL, err error) {
@@ -674,17 +710,25 @@ func (b *Browser) Focus() (next *url.URL, err error) {
 				b.PreviousLink()
 			case tcell.KeyEnter:
 				return b.CurrentLink()
+			case tcell.KeyLeft:
+				b.ScrollLeft()
 			case tcell.KeyUp:
 				b.ScrollUp()
 			case tcell.KeyDown:
 				b.ScrollDown()
 				//TODO: Add page scrolling?
+			case tcell.KeyRight:
+				b.ScrollRight()
 			case tcell.KeyRune:
 				switch ev.Rune() {
+				case 'h':
+					b.ScrollLeft()
 				case 'j':
 					b.ScrollDown()
 				case 'k':
 					b.ScrollUp()
+				case 'l':
+					b.ScrollRight()
 				case 'n':
 					b.NextLink()
 				}
