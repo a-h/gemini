@@ -587,27 +587,39 @@ type Browser struct {
 	ActiveLineIndex int
 }
 
-func (b *Browser) ScrollLeft() {
+func (b *Browser) ScrollLeft(by int) {
 	if b.ScrollX < 0 {
-		b.ScrollX++
+		b.ScrollX += by
+		if b.ScrollX > 0 {
+			b.ScrollX = 0
+		}
 	}
 }
 
-func (b *Browser) ScrollRight() {
+func (b *Browser) ScrollRight(by int) {
 	if b.ScrollX > b.MinScrollX {
-		b.ScrollX--
+		b.ScrollX -= by
+		if b.ScrollX < b.MinScrollX {
+			b.ScrollX = b.MinScrollX
+		}
 	}
 }
 
-func (b *Browser) ScrollUp() {
+func (b *Browser) ScrollUp(by int) {
 	if b.ScrollY < 0 {
-		b.ScrollY++
+		b.ScrollY += by
+		if b.ScrollY > 0 {
+			b.ScrollY = 0
+		}
 	}
 }
 
-func (b *Browser) ScrollDown() {
+func (b *Browser) ScrollDown(by int) {
 	if b.ScrollY > b.MinScrollY {
-		b.ScrollY--
+		b.ScrollY -= by
+		if b.ScrollY < b.MinScrollY {
+			b.ScrollY = b.MinScrollY
+		}
 	}
 }
 
@@ -715,14 +727,23 @@ func (b *Browser) Focus() (next *url.URL, err error) {
 			case tcell.KeyEnd:
 				b.ScrollX = b.MinScrollX
 			case tcell.KeyLeft:
-				b.ScrollLeft()
+				b.ScrollLeft(1)
 			case tcell.KeyUp:
-				b.ScrollUp()
+				b.ScrollUp(1)
 			case tcell.KeyDown:
-				b.ScrollDown()
-				//TODO: Add page scrolling?
+				b.ScrollDown(1)
 			case tcell.KeyRight:
-				b.ScrollRight()
+				b.ScrollRight(1)
+			case tcell.KeyCtrlU:
+				_, h := b.Screen.Size()
+				b.ScrollUp(h / 2)
+			case tcell.KeyCtrlD:
+				_, h := b.Screen.Size()
+				b.ScrollDown(h / 2)
+			case tcell.KeyPgUp:
+				b.ScrollUp(5)
+			case tcell.KeyPgDn:
+				b.ScrollDown(5)
 			case tcell.KeyRune:
 				switch ev.Rune() {
 				case 'g':
@@ -730,13 +751,13 @@ func (b *Browser) Focus() (next *url.URL, err error) {
 				case 'G':
 					b.ScrollY = b.MinScrollY
 				case 'h':
-					b.ScrollLeft()
+					b.ScrollLeft(1)
 				case 'j':
-					b.ScrollDown()
+					b.ScrollDown(1)
 				case 'k':
-					b.ScrollUp()
+					b.ScrollUp(1)
 				case 'l':
-					b.ScrollRight()
+					b.ScrollRight(1)
 				case 'n':
 					b.NextLink()
 				}
