@@ -82,7 +82,7 @@ func NewConfig() (c *Config, err error) {
 	c = &Config{
 		Home:               "gemini://gus.guru",
 		Width:              80,
-		MaximumHistory:     5, //TODO: Increase after testing.
+		MaximumHistory:     128,
 		HostCertificates:   map[string]string{},
 		ClientCertPrefixes: map[clientCertPrefix]struct{}{},
 	}
@@ -236,6 +236,7 @@ func Run(ctx context.Context, state *State) {
 	var u *url.URL
 	for {
 		if action == ActionAskForURL {
+			//TODO: Add history into here.
 			state.URL, ok = NewInput(state.Screen, "Enter URL:", state.URL).Focus()
 			if !ok {
 				return
@@ -1013,6 +1014,7 @@ func (h *History) Forward() {
 }
 
 func (h *History) Add(b *Browser) {
+	//TODO: Save the history to disk as a Gemini file, so we can open it up in the Browser display? Or do something custom?
 	if len(h.browsers) == h.max && h.max > 0 {
 		h.browsers = h.browsers[1:]
 	}
