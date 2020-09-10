@@ -3,14 +3,19 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"os/signal"
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -22,36 +27,63 @@ import (
 	"github.com/pkg/browser"
 )
 
-type Config struct {
-	Home             string
-	Width            int
-	HostCertificates map[string]string
+type clientCertPrefix string
+
+func (cc clientCertPrefix) fileName() string {
+	ss := sha256.New()
+	ss.Write([]byte(cc))
+	fn := hex.EncodeToString(ss.Sum(nil))
+	return path.Join(configPath, fn)
 }
 
-func (c *Config) configFileName() string {
+func (cc clientCertPrefix) Load() (tls.Certificate, error) {
+	fn := cc.fileName()
+	return tls.LoadX509KeyPair(fn+".cert", fn+".key")
+}
+
+func (cc clientCertPrefix) Save(cert, key []byte) error {
+	fn := cc.fileName()
+	if err := atomic.WriteFile(fn+".cert", bytes.NewReader(cert)); err != nil {
+		return err
+	}
+	return atomic.WriteFile(fn+".key", bytes.NewReader(key))
+}
+
+var configPath = func() string {
 	home, _ := os.UserHomeDir()
-	return path.Join(home, ".min/config.ini")
+	return path.Join(home, ".min")
+}()
+
+type Config struct {
+	Home               string
+	Width              int
+	HostCertificates   map[string]string
+	ClientCertPrefixes map[clientCertPrefix]struct{}
 }
 
 func (c *Config) Save() error {
 	b := new(bytes.Buffer)
 	fmt.Fprintf(b, "home=%v\n", c.Home)
 	fmt.Fprintf(b, "width=%v\n", c.Width)
+	for prefix := range c.ClientCertPrefixes {
+		fmt.Fprintf(b, "clientcert=%v\n", prefix)
+	}
 	for host, cert := range c.HostCertificates {
 		fmt.Fprintf(b, "hostcert/%v=%v\n", host, cert)
 	}
-	fn := c.configFileName()
+	fn := path.Join(configPath, "config.ini")
 	os.MkdirAll(path.Dir(fn), os.ModePerm)
 	return atomic.WriteFile(fn, b)
 }
 
 func NewConfig() (c *Config, err error) {
 	c = &Config{
-		Home:             "gemini://gus.guru",
-		Width:            80,
-		HostCertificates: map[string]string{},
+		Home:               "gemini://gus.guru",
+		Width:              80,
+		HostCertificates:   map[string]string{},
+		ClientCertPrefixes: map[clientCertPrefix]struct{}{},
 	}
-	lines, err := readLines(c.configFileName())
+	lines, err := readLines(path.Join(configPath, "config.ini"))
 	if err != nil {
 		return
 	}
@@ -70,6 +102,8 @@ func NewConfig() (c *Config, err error) {
 				return c, err
 			}
 			c.Width = int(w)
+		case "clientcert":
+			c.ClientCertPrefixes[clientCertPrefix(v)] = struct{}{}
 		}
 		if strings.HasPrefix(k, "hostcert/") {
 			host := strings.TrimPrefix(k, "hostcert/")
@@ -97,6 +131,24 @@ func readLines(fn string) (lines []string, err error) {
 }
 
 func main() {
+	// Configure the context to handle SIGINT.
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	defer func() {
+		signal.Stop(c)
+		cancel()
+	}()
+	go func() {
+		select {
+		case <-c:
+			cancel()
+		case <-ctx.Done():
+		}
+		os.Exit(2)
+	}()
+
+	// Setup config.
 	conf, err := NewConfig()
 	if err != nil {
 		fmt.Println("Error loading config:", err)
@@ -120,10 +172,8 @@ func main() {
 	s.SetStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorBlack))
-	s.Clear()
-	s.Show()
 
-	// Parse the command-line URL, if provided.
+	// Use a URL passed via the command-line URL, if provided.
 	urlString := strings.Join(os.Args[1:], "")
 	if urlString == "" {
 		urlString = conf.Home
@@ -132,16 +182,23 @@ func main() {
 	// Create required top-level variables.
 	client := gemini.NewClient()
 	for host, cert := range conf.HostCertificates {
-		client.AddAlllowedCertificateForHost(host, cert)
+		client.AddServerCertificate(host, cert)
 	}
-	var redirectCount int
+	for prefix := range conf.ClientCertPrefixes {
+		cert, err := prefix.Load()
+		if err != nil {
+			NewOptions(s, fmt.Sprintf("Error loading client certificate\n\nURL: %v\nMessage: %v", prefix, err), "Continue").Focus()
+			continue
+		}
+		client.AddClientCertificate(string(prefix), cert)
+	}
 
-	var askForURL, ok bool
-	askForURL = true
+	var redirectCount int
+	var ok bool
+	var askForURL = true
 	for {
-		// Grab the URL input.
 		if askForURL {
-			urlString, ok = NewInput(s, "Location:", urlString).Focus()
+			urlString, ok = NewInput(s, "Enter URL:", urlString).Focus()
 			if !ok {
 				break
 			}
@@ -150,7 +207,7 @@ func main() {
 		// Check the URL.
 		u, err := url.Parse(urlString)
 		if err != nil {
-			NewOptions(s, fmt.Sprintf("Failed to parse address: %q: %v", urlString, err), "OK").Focus()
+			NewOptions(s, fmt.Sprintf("Error parsing URL\n\nURL: %v\nMessage: %v", urlString, err), "Continue").Focus()
 			askForURL = true
 			continue
 		}
@@ -160,9 +217,9 @@ func main() {
 		var certificates []string
 	out:
 		for {
-			resp, certificates, _, ok, err = client.RequestURL(u)
+			resp, certificates, _, ok, err = client.RequestURL(ctx, u)
 			if err != nil {
-				switch NewOptions(s, fmt.Sprintf("Request error: %v", err), "Retry", "Cancel").Focus() {
+				switch NewOptions(s, fmt.Sprintf("Error making request\n\nURL: %v\nMessage: %v", u, err), "Retry", "Cancel").Focus() {
 				case "Retry":
 					askForURL = false
 					continue
@@ -171,16 +228,16 @@ func main() {
 				}
 			}
 			if !ok {
-				//TOFU check required.
-				switch NewOptions(s, fmt.Sprintf("Accept client certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
+				// TOFU check required.
+				switch NewOptions(s, fmt.Sprintf("Accept server certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
 				case "Accept (Permanent)":
 					conf.HostCertificates[u.Host] = certificates[0]
 					conf.Save()
-					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
+					client.AddServerCertificate(u.Host, certificates[0])
 					askForURL = false
 					continue
 				case "Accept (Temporary)":
-					client.AddAlllowedCertificateForHost(u.Host, certificates[0])
+					client.AddServerCertificate(u.Host, certificates[0])
 					askForURL = false
 					continue
 				case "Reject":
@@ -193,16 +250,20 @@ func main() {
 			askForURL = true
 			continue
 		}
-		if strings.HasPrefix(string(resp.Header.Code), "3") {
+		if strings.HasPrefix(string(resp.Header.Code), "3") { // Redirect
 			redirectCount++
 			if redirectCount >= 5 {
-				NewOptions(s, fmt.Sprintf("Server issued 5 or more redirects, cancelling request."), "OK").Focus()
+				if keepTrying := NewOptions(s, fmt.Sprintf("The server issued 5 redirects, keep trying?"), "Keep Trying", "Cancel").Focus(); keepTrying == "Keep Trying" {
+					redirectCount = 0
+					askForURL = false
+					continue
+				}
 				askForURL = true
 				continue
 			}
 			redirectTo, err := url.Parse(resp.Header.Meta)
 			if err != nil {
-				NewOptions(s, fmt.Sprintf("Server returned invalid redirect: code %s, meta: %q", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("The server returned an invalid redirect URL\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "Cancel").Focus()
 				askForURL = false
 				continue
 			}
@@ -217,7 +278,7 @@ func main() {
 			}
 			if redirectTo.Host != u.Host {
 				if open := NewOptions(s, fmt.Sprintf("Follow cross-domain redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "No" {
-					askForURL = false
+					askForURL = true
 					continue
 				}
 			}
@@ -226,35 +287,44 @@ func main() {
 			continue
 		}
 		redirectCount = 0
-		if strings.HasPrefix(string(resp.Header.Code), "6") {
-			var meta string
-			if resp.Header.Meta != "" {
-				meta = fmt.Sprintf("(%s)", resp.Header.Meta)
-			}
-			msg := fmt.Sprintf("The server has requested a certificate.\n\nCode: %s %s", resp.Header.Code, meta)
-			switch NewOptions(s, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus() {
-			case "Create (Permanent)":
-				//TODO: Add a certificate to the permanent store.
-				askForURL = false
-				continue
-			case "Create (Temporary)":
-				// Add a certificate to the client.
-				cert, key, _ := cert.Generate("", "", "", time.Hour*24)
-				keyPair, err := tls.X509KeyPair(cert, key)
-				if err != nil {
-					NewOptions(s, fmt.Sprintf("Failed to create certificate: %v", err), "OK").Focus()
-					askForURL = true
-					continue
-				}
-				client.AddCertificateForURLPrefix(u.String(), keyPair)
-				askForURL = false
-				continue
-			case "Cancel":
+		if strings.HasPrefix(string(resp.Header.Code), "6") { // Client certificate required
+			msg := fmt.Sprintf("The server has requested a certificate\n\nURL: %s\nCode: %s\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta)
+			action := NewOptions(s, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus()
+			if action == "Cancel" {
 				askForURL = true
 				continue
 			}
+			permanent := strings.Contains(action, "Permanent")
+			duration := time.Hour * 24
+			if permanent {
+				duration *= 365 * 200
+			}
+			cert, key, _ := cert.Generate("", "", "", duration)
+			keyPair, err := tls.X509KeyPair(cert, key)
+			if err != nil {
+				NewOptions(s, fmt.Sprintf("Error creating certificate: %v", err), "Continue").Focus()
+				askForURL = true
+				continue
+			}
+			prefix := clientCertPrefix(u.Scheme + "://" + u.Host + u.Path)
+			client.AddClientCertificate(string(prefix), keyPair)
+			if permanent {
+				if err = prefix.Save(cert, key); err != nil {
+					NewOptions(s, fmt.Sprintf("Error saving certificate: %v", err), "Continue").Focus()
+					askForURL = true
+					continue
+				}
+				conf.ClientCertPrefixes[prefix] = struct{}{}
+				if err = conf.Save(); err != nil {
+					NewOptions(s, fmt.Sprintf("Error saving configuration: %v", err), "Continue").Focus()
+					askForURL = true
+					continue
+				}
+			}
+			askForURL = false
+			continue
 		}
-		if strings.HasPrefix(string(resp.Header.Code), "1") {
+		if strings.HasPrefix(string(resp.Header.Code), "1") { // Input
 			text, ok := NewInput(s, resp.Header.Meta, "").Focus()
 			if !ok {
 				continue
@@ -265,16 +335,16 @@ func main() {
 			askForURL = false
 			continue
 		}
-		if strings.HasPrefix(string(resp.Header.Code), "2") {
+		if strings.HasPrefix(string(resp.Header.Code), "2") { // Success
 			b, err := NewBrowser(s, conf.Width, u, resp)
 			if err != nil {
-				NewOptions(s, fmt.Sprintf("Error displaying server response:\n\n%v", err), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Error displaying server response: %v", err), "OK").Focus()
 				askForURL = true
 				continue
 			}
 			next, err := b.Focus()
 			if err != nil {
-				NewOptions(s, fmt.Sprintf("Invalid link: %v\n", err), "OK").Focus()
+				NewOptions(s, fmt.Sprintf("Error processing link returned by server\n\nLink: %v\nMessage: %v", next, err), "OK").Focus()
 				askForURL = true
 				continue
 			}
@@ -293,7 +363,7 @@ func main() {
 			askForURL = true
 			continue
 		}
-		NewOptions(s, fmt.Sprintf("Unknown code: %v %s", resp.Header.Code, resp.Header.Meta), "OK").Focus()
+		NewOptions(s, fmt.Sprintf("Error returned by server\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "OK").Focus()
 		askForURL = true
 	}
 }
@@ -784,7 +854,7 @@ func (b *Browser) Draw() {
 
 func (b *Browser) Focus() (next *url.URL, err error) {
 	b.Draw()
-	b.Screen.Show()
+	b.Screen.Sync()
 	for {
 		switch ev := b.Screen.PollEvent().(type) {
 		case *tcell.EventResize:

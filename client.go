@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -120,11 +121,13 @@ func isValidMeta(m string) bool {
 	return len(m) <= 1024
 }
 
-// NewClient creates a new gemini client, using the provided X509 keypair.
+// NewClient creates a new gemini client.
 func NewClient() *Client {
 	return &Client{
 		prefixToCertificate:            make(map[string]tls.Certificate),
 		domainToAllowedCertificateHash: make(map[string]map[string]interface{}),
+		WriteTimeout:                   time.Second * 5,
+		ReadTimeout:                    time.Second * 5,
 	}
 }
 
@@ -137,16 +140,18 @@ type Client struct {
 	// domainToAllowedCertificateHash is used to validate the remote server.
 	domainToAllowedCertificateHash map[string]map[string]interface{}
 	// Insecure mode does not check the hash of remote certificates.
-	Insecure bool
+	Insecure     bool
+	WriteTimeout time.Duration
+	ReadTimeout  time.Duration
 }
 
-// AddCertificateForURLPrefix adds the certificate when the URL prefix is encountered.
-func (client *Client) AddCertificateForURLPrefix(prefix string, cert tls.Certificate) {
+// AddClientCertificate adds a certificate to use when the URL prefix is encountered.
+func (client *Client) AddClientCertificate(prefix string, cert tls.Certificate) {
 	client.prefixToCertificate[prefix] = cert
 }
 
-// AddAllowedCertificateForHost allows the client to connect to a domain based on its hash.
-func (client *Client) AddAlllowedCertificateForHost(host, certificateHash string) {
+// AddServerCertificate allows the client to connect to a domain based on its hash.
+func (client *Client) AddServerCertificate(host, certificateHash string) {
 	if m := client.domainToAllowedCertificateHash[host]; m == nil {
 		client.domainToAllowedCertificateHash[host] = make(map[string]interface{})
 	}
@@ -154,12 +159,12 @@ func (client *Client) AddAlllowedCertificateForHost(host, certificateHash string
 }
 
 // Request a response from a given Gemini URL.
-func (client *Client) Request(u string) (resp *Response, certificates []string, authenticated, ok bool, err error) {
+func (client *Client) Request(ctx context.Context, u string) (resp *Response, certificates []string, authenticated, ok bool, err error) {
 	uu, err := url.Parse(u)
 	if err != nil {
 		return
 	}
-	return client.RequestURL(uu)
+	return client.RequestURL(ctx, uu)
 }
 
 // GetCertificate returns a certificate to use for the given URL, if one exists.
@@ -175,38 +180,46 @@ func (client *Client) GetCertificate(u *url.URL) (cert tls.Certificate, ok bool)
 }
 
 // RequestNoTLS carries out a request without TLS enabled.
-func (client *Client) RequestNoTLS(u *url.URL) (resp *Response, err error) {
+func (client *Client) RequestNoTLS(ctx context.Context, u *url.URL) (resp *Response, err error) {
+	dialer := net.Dialer{
+		Timeout: client.ReadTimeout,
+	}
 	port := u.Port()
 	if port == "" {
 		port = "1965"
 	}
-	conn, err := net.Dial("tcp", u.Hostname()+":"+port)
+	conn, err := dialer.DialContext(ctx, "tcp", u.Hostname()+":"+port)
 	if err != nil {
 		err = fmt.Errorf("gemini: error connecting: %w", err)
 		return
 	}
-	return client.RequestConn(conn, u)
+	return client.RequestConn(ctx, conn, u)
 }
 
 // RequestURL requests a response from a parsed URL.
 // ok returns true if a matching server certificate is found (i.e. the server is OK).
-func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []string, authenticated, ok bool, err error) {
-	config := &tls.Config{
-		InsecureSkipVerify: true,
+func (client *Client) RequestURL(ctx context.Context, u *url.URL) (resp *Response, certificates []string, authenticated, ok bool, err error) {
+	tlsDialer := tls.Dialer{
+		NetDialer: &net.Dialer{
+			Timeout: client.ReadTimeout,
+		},
+		Config: &tls.Config{
+			InsecureSkipVerify: true,
+		},
 	}
 	if cert, ok := client.GetCertificate(u); ok {
-		config.Certificates = []tls.Certificate{cert}
+		tlsDialer.Config.Certificates = []tls.Certificate{cert}
 	}
 	port := u.Port()
 	if port == "" {
 		port = "1965"
 	}
-	conn, err := tls.Dial("tcp", u.Hostname()+":"+port, config)
+	cn, err := tlsDialer.DialContext(ctx, "tcp", u.Hostname()+":"+port)
 	if err != nil {
 		err = fmt.Errorf("gemini: error connecting: %w", err)
 		return
-
 	}
+	conn := cn.(*tls.Conn)
 	allowedHashesForDomain := client.domainToAllowedCertificateHash[u.Host]
 	ok = false
 	for _, cert := range conn.ConnectionState().PeerCertificates {
@@ -228,19 +241,44 @@ func (client *Client) RequestURL(u *url.URL) (resp *Response, certificates []str
 		return
 	}
 	authenticated = conn.ConnectionState().NegotiatedProtocolIsMutual
-	resp, err = client.RequestConn(conn, u)
+	resp, err = client.RequestConn(ctx, conn, u)
 	return
+}
+
+type readerCtx struct {
+	ctx context.Context
+	r   io.ReadCloser
+}
+
+func (r *readerCtx) Read(p []byte) (n int, err error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
+
+func (r *readerCtx) Close() (err error) {
+	return r.r.Close()
+}
+
+func newReaderContext(ctx context.Context, r io.ReadCloser) io.ReadCloser {
+	return &readerCtx{
+		ctx: ctx,
+		r:   r,
+	}
 }
 
 // RequestConn uses a given connection to make the request. This allows for insecure requests to be made.
 // net.Dial("tcp", "localhost:1965")
-func (client *Client) RequestConn(conn net.Conn, u *url.URL) (resp *Response, err error) {
+func (client *Client) RequestConn(ctx context.Context, conn net.Conn, u *url.URL) (resp *Response, err error) {
+	conn.SetWriteDeadline(time.Now().Add(client.WriteTimeout))
 	_, err = conn.Write([]byte(u.String() + "\r\n"))
 	if err != nil {
 		err = fmt.Errorf("gemini: error writing request: %w", err)
 		return
 	}
-	resp, err = NewResponse(conn)
+	conn.SetReadDeadline(time.Now().Add(client.ReadTimeout))
+	resp, err = NewResponse(newReaderContext(ctx, conn))
 	return
 }
 

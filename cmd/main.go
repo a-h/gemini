@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/a-h/gemini"
 )
@@ -53,6 +55,15 @@ examples:
 }
 
 func request(args []string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		fmt.Println("Shutting down...")
+		cancel()
+	}()
+
 	cmd := flag.NewFlagSet("request", flag.ExitOnError)
 	noTLSFlag := cmd.Bool("noTLS", false, "Don't connect with TLS, or send client server certificates.")
 	insecureFlag := cmd.Bool("insecure", false, "Allow any server certificate.")
@@ -87,16 +98,16 @@ func request(args []string) {
 			fmt.Printf("Failed to parse certFile / keyFile: %v\n", err)
 			os.Exit(1)
 		}
-		client.AddCertificateForURLPrefix("/", keyPair)
+		client.AddClientCertificate("/", keyPair)
 	}
 	var authenticated, ok bool
 	var resp *gemini.Response
 	var certificates []string
 	if *noTLSFlag {
 		ok = true // No server validation takes place.
-		resp, err = client.RequestNoTLS(u)
+		resp, err = client.RequestNoTLS(ctx, u)
 	} else {
-		resp, certificates, authenticated, ok, err = client.RequestURL(u)
+		resp, certificates, authenticated, ok, err = client.RequestURL(ctx, u)
 	}
 	if err != nil {
 		fmt.Printf("Request failed: %v\n", err)
@@ -122,7 +133,7 @@ func request(args []string) {
 			fmt.Println(s.Text())
 		}
 		if s.Err() != nil {
-			fmt.Printf("Error reading response body: %v\n", err)
+			fmt.Printf("Error reading response body: %v\n", s.Err())
 			os.Exit(1)
 		}
 		defer resp.Body.Close()

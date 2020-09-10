@@ -97,8 +97,9 @@ func NewServer(ctx context.Context, addr string, domainToHandler map[string]*Dom
 		Context:         ctx,
 		Addr:            addr,
 		DomainToHandler: domainToHandler,
-		ReadTimeout:     time.Second * 10,
-		WriteTimeout:    time.Second * 30,
+		ReadTimeout:     time.Second * 5,
+		WriteTimeout:    time.Second * 10,
+		HandlerTimeout:  time.Second * 30,
 	}
 }
 
@@ -110,6 +111,7 @@ type Server struct {
 	DomainToHandler map[string]*DomainHandler
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
+	HandlerTimeout  time.Duration
 }
 
 func (srv *Server) logf(format string, v ...interface{}) {
@@ -212,8 +214,6 @@ func (srv *Server) serveTLS(l net.Listener) (err error) {
 
 func (srv *Server) handleTLS(conn *tls.Conn) {
 	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(srv.ReadTimeout))
-	conn.SetWriteDeadline(time.Now().Add(srv.WriteTimeout))
 	if err := conn.Handshake(); err != nil {
 		srv.logf("gemini: failed TLS handshake from %s: %v", conn.RemoteAddr(), err)
 		return
@@ -241,9 +241,10 @@ func (srv *Server) handleTLS(conn *tls.Conn) {
 }
 
 // while this function could be inlined, exposing it makes it easier to test in isolation.
-func (srv *Server) handle(dh *DomainHandler, certificate Certificate, rw io.ReadWriter) {
+func (srv *Server) handle(dh *DomainHandler, certificate Certificate, conn net.Conn) {
 	start := time.Now()
-	r, ok, err := srv.parseRequest(rw)
+	conn.SetReadDeadline(time.Now().Add(srv.ReadTimeout))
+	r, ok, err := srv.parseRequest(conn)
 	if err != nil {
 		srv.logf("gemini: failed to parse request: %v", err)
 		return
@@ -252,9 +253,12 @@ func (srv *Server) handle(dh *DomainHandler, certificate Certificate, rw io.Read
 		srv.logf("gemini: could not parse request")
 		return
 	}
-	r.Context = srv.Context
 	r.Certificate = certificate
-	w := NewWriter(rw)
+	ctx, cancel := context.WithTimeout(srv.Context, srv.HandlerTimeout)
+	defer cancel()
+	r.Context = ctx
+	conn.SetWriteDeadline(time.Now().Add(srv.WriteTimeout))
+	w := NewWriter(conn)
 	defer func() {
 		if p := recover(); p != nil {
 			srv.logf("gemini: server error: %v: %v", r.URL.Path, p)
