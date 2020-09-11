@@ -9,10 +9,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"os/signal"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,21 +29,21 @@ import (
 	"github.com/pkg/browser"
 )
 
-type clientCertPrefix string
+type ClientCertPrefix string
 
-func (cc clientCertPrefix) fileName() string {
+func (cc ClientCertPrefix) fileName() string {
 	ss := sha256.New()
 	ss.Write([]byte(cc))
 	fn := hex.EncodeToString(ss.Sum(nil))
 	return path.Join(configPath, fn)
 }
 
-func (cc clientCertPrefix) Load() (tls.Certificate, error) {
+func (cc ClientCertPrefix) Load() (tls.Certificate, error) {
 	fn := cc.fileName()
 	return tls.LoadX509KeyPair(fn+".cert", fn+".key")
 }
 
-func (cc clientCertPrefix) Save(cert, key []byte) error {
+func (cc ClientCertPrefix) Save(cert, key []byte) error {
 	fn := cc.fileName()
 	if err := atomic.WriteFile(fn+".cert", bytes.NewReader(cert)); err != nil {
 		return err
@@ -59,7 +61,7 @@ type Config struct {
 	Width              int
 	MaximumHistory     int
 	HostCertificates   map[string]string
-	ClientCertPrefixes map[clientCertPrefix]struct{}
+	ClientCertPrefixes map[ClientCertPrefix]struct{}
 }
 
 func (c *Config) Save() error {
@@ -84,7 +86,7 @@ func NewConfig() (c *Config, err error) {
 		Width:              80,
 		MaximumHistory:     128,
 		HostCertificates:   map[string]string{},
-		ClientCertPrefixes: map[clientCertPrefix]struct{}{},
+		ClientCertPrefixes: map[ClientCertPrefix]struct{}{},
 	}
 	lines, err := readLines(path.Join(configPath, "config.ini"))
 	if err != nil {
@@ -112,7 +114,7 @@ func NewConfig() (c *Config, err error) {
 			}
 			c.MaximumHistory = int(m)
 		case "clientcert":
-			c.ClientCertPrefixes[clientCertPrefix(v)] = struct{}{}
+			c.ClientCertPrefixes[ClientCertPrefix(v)] = struct{}{}
 		}
 		if strings.HasPrefix(k, "hostcert/") {
 			host := strings.TrimPrefix(k, "hostcert/")
@@ -164,10 +166,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create the history file.
+	h, closer, err := NewHistory(conf.MaximumHistory, path.Join(configPath, "history.tsv"))
+	if err != nil {
+		fmt.Println("Error loading history:", err)
+		os.Exit(1)
+	}
+	defer closer()
+
 	// State.
 	state := &State{
 		URL:     strings.Join(os.Args[1:], ""),
-		History: NewHistory(conf.MaximumHistory),
+		History: h,
 		Conf:    conf,
 	}
 
@@ -223,23 +233,45 @@ type State struct {
 type Action string
 
 const (
+	ActionHome      Action = ""
 	ActionAskForURL Action = "AskForURL"
 	ActionNavigate  Action = "Navigate"
 	ActionDisplay   Action = "Display"
 )
 
 func Run(ctx context.Context, state *State) {
-	action := ActionAskForURL
+	var action Action
 	var redirectCount int
 	var ok bool
 	var err error
 	var u *url.URL
 	for {
+		if action == ActionHome {
+			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "Exit").Focus() {
+			case "Enter URL":
+				action = ActionAskForURL
+				continue
+			case "View History":
+				hu, hr := state.History.All()
+				b, err := NewBrowser(state.Screen, state.Conf.Width, hu, hr)
+				if err != nil {
+					NewOptions(state.Screen, fmt.Sprintf("Error viewing history: %v", err), "Continue").Focus()
+					continue
+				}
+				if err = state.History.Add(b); err != nil {
+					NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
+				}
+				action = ActionDisplay
+				continue
+			case "Exit":
+				return
+			}
+		}
 		if action == ActionAskForURL {
-			//TODO: Add history into here.
 			state.URL, ok = NewInput(state.Screen, "Enter URL:", state.URL).Focus()
 			if !ok {
-				return
+				action = ActionHome
+				continue
 			}
 			// Check the URL.
 			u, err = url.Parse(state.URL)
@@ -347,7 +379,7 @@ func Run(ctx context.Context, state *State) {
 					action = ActionAskForURL
 					continue
 				}
-				prefix := clientCertPrefix(u.Scheme + "://" + u.Host + u.Path)
+				prefix := ClientCertPrefix(u.Scheme + "://" + u.Host + u.Path)
 				state.Client.AddClientCertificate(string(prefix), keyPair)
 				if permanent {
 					if err = prefix.Save(cert, key); err != nil {
@@ -383,7 +415,9 @@ func Run(ctx context.Context, state *State) {
 					action = ActionAskForURL
 					continue
 				}
-				state.History.Add(b)
+				if err = state.History.Add(b); err != nil {
+					NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
+				}
 				action = ActionDisplay
 				continue
 			}
@@ -980,17 +1014,70 @@ func (b *Browser) Focus() (next *url.URL, back, forward bool, err error) {
 	}
 }
 
-func NewHistory(size int) *History {
-	return &History{
+func NewHistory(size int, historyFileName string) (h *History, closer func(), err error) {
+	h = &History{
 		max:      size,
+		past:     []Visit{},
 		browsers: []*Browser{},
 	}
+	// Read past history.
+	lines, err := readLines(historyFileName)
+	if err != nil {
+		return
+	}
+	for _, s := range lines {
+		var v Visit
+		v, err = ParseVisit(s)
+		if err != nil {
+			err = fmt.Errorf("history: couldn't parse visit: %w", err)
+			return
+		}
+		h.past = append(h.past, v)
+	}
+	// Open file to add to history.Be
+	h.f, err = os.OpenFile(historyFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	closer = func() {
+		h.f.Sync()
+		h.f.Close()
+	}
+	return
 }
 
 type History struct {
 	max      int
+	past     []Visit
 	browsers []*Browser
 	index    int
+	f        *os.File
+}
+
+func ParseVisit(s string) (v Visit, err error) {
+	parts := strings.SplitN(s, "\t", 2)
+	if len(parts) != 2 {
+		return
+	}
+	v.Time, err = time.Parse(time.RFC3339, parts[0])
+	if err != nil {
+		return
+	}
+	v.URL = parts[1]
+	return
+}
+
+type Visit struct {
+	Time time.Time
+	URL  string
+}
+
+func (v Visit) TabDelimited() string {
+	return fmt.Sprintf("%s\t%s\n", v.Time.Format(time.RFC3339), v.URL)
+}
+
+func (v Visit) Gemini() string {
+	return fmt.Sprintf("=> %s (Visited: %s)\n", v.URL, v.Time.Format(time.RFC3339))
 }
 
 func (h *History) Current() (b *Browser) {
@@ -1013,13 +1100,44 @@ func (h *History) Forward() {
 	}
 }
 
-func (h *History) Add(b *Browser) {
-	//TODO: Save the history to disk as a Gemini file, so we can open it up in the Browser display? Or do something custom?
+func (h *History) Add(b *Browser) error {
 	if len(h.browsers) == h.max && h.max > 0 {
 		h.browsers = h.browsers[1:]
 	}
 	h.browsers = append(h.browsers, b)
 	h.index = len(h.browsers) - 1
+	if b.URL.Scheme == "min" {
+		// Don't save the fact that we viewed history or bookmarks.
+		return nil
+	}
+	v := Visit{
+		URL:  b.URL.String(),
+		Time: time.Now(),
+	}
+	h.past = append(h.past, v)
+	_, err := fmt.Fprintf(h.f, v.TabDelimited())
+	return err
+}
+
+func (h *History) All() (u *url.URL, resp *gemini.Response) {
+	u = &url.URL{Scheme: "min", Opaque: "history"}
+	bdy := new(bytes.Buffer)
+	io.WriteString(bdy, "# History\n\n")
+	for _, s := range byTimeDescending(h.past) {
+		io.WriteString(bdy, s.Gemini())
+	}
+	resp = &gemini.Response{
+		Header: &gemini.Header{Code: gemini.CodeSuccess},
+		Body:   ioutil.NopCloser(bdy),
+	}
+	return
+}
+
+func byTimeDescending(views []Visit) []Visit {
+	sort.Slice(views, func(i, j int) bool {
+		return views[j].Time.Before(views[i].Time)
+	})
+	return views
 }
 
 func NewInput(s tcell.Screen, msg, text string) *Input {
@@ -1128,6 +1246,8 @@ func (o *Input) Focus() (text string, ok bool) {
 					o.CursorIndex++
 				case tcell.KeyBacktab:
 					o.Up()
+				case tcell.KeyEscape:
+					o.Down()
 				case tcell.KeyTab:
 					o.Down()
 				case tcell.KeyDown:
