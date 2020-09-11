@@ -167,18 +167,27 @@ func main() {
 	}
 
 	// Create the history file.
-	h, closer, err := NewHistory(conf.MaximumHistory, path.Join(configPath, "history.tsv"))
+	h, historyCloser, err := NewHistory(conf.MaximumHistory, path.Join(configPath, "history.tsv"))
 	if err != nil {
 		fmt.Println("Error loading history:", err)
 		os.Exit(1)
 	}
-	defer closer()
+	defer historyCloser()
+
+	// Create the boookmarks file.
+	b, bookmarksCloser, err := NewBookmarks(path.Join(configPath, "bookmarks.tsv"))
+	if err != nil {
+		fmt.Println("Error loading bookmarks:", err)
+		os.Exit(1)
+	}
+	defer bookmarksCloser()
 
 	// State.
 	state := &State{
-		URL:     strings.Join(os.Args[1:], ""),
-		History: h,
-		Conf:    conf,
+		URL:       strings.Join(os.Args[1:], ""),
+		History:   h,
+		Bookmarks: b,
+		Conf:      conf,
 	}
 
 	// Use a URL passed via the command-line URL, if provided.
@@ -223,20 +232,22 @@ func main() {
 }
 
 type State struct {
-	URL     string
-	History *History
-	Screen  tcell.Screen
-	Client  *gemini.Client
-	Conf    *Config
+	URL       string
+	History   *History
+	Bookmarks *Bookmarks
+	Screen    tcell.Screen
+	Client    *gemini.Client
+	Conf      *Config
 }
 
 type Action string
 
 const (
-	ActionHome      Action = ""
-	ActionAskForURL Action = "AskForURL"
-	ActionNavigate  Action = "Navigate"
-	ActionDisplay   Action = "Display"
+	ActionHome           Action = ""
+	ActionAskForURL      Action = "AskForURL"
+	ActionNavigate       Action = "Navigate"
+	ActionDisplay        Action = "Display"
+	ActionToggleBookmark Action = "ToggleBookmark"
 )
 
 func Run(ctx context.Context, state *State) {
@@ -247,7 +258,7 @@ func Run(ctx context.Context, state *State) {
 	var u *url.URL
 	for {
 		if action == ActionHome {
-			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "Exit").Focus() {
+			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "View Bookmarks", "Exit").Focus() {
 			case "Enter URL":
 				action = ActionAskForURL
 				continue
@@ -263,9 +274,31 @@ func Run(ctx context.Context, state *State) {
 				}
 				action = ActionDisplay
 				continue
+			case "View Bookmarks":
+				hu, hr := state.Bookmarks.All()
+				b, err := NewBrowser(state.Screen, state.Conf.Width, hu, hr)
+				if err != nil {
+					NewOptions(state.Screen, fmt.Sprintf("Error viewing bookmarks: %v", err), "Continue").Focus()
+					continue
+				}
+				state.History.Add(b)
+				action = ActionDisplay
+				continue
 			case "Exit":
 				return
 			}
+		}
+		if action == ActionToggleBookmark {
+			if state.Bookmarks.Contains(u) {
+				if NewOptions(state.Screen, fmt.Sprintf("Remove bookmark: %v", u), "Yes", "No").Focus() == "Yes" {
+					state.Bookmarks.Remove(u)
+				}
+			} else {
+				if NewOptions(state.Screen, fmt.Sprintf("Add bookmark: %v", u), "Yes", "No").Focus() == "Yes" {
+					state.Bookmarks.Add(u)
+				}
+			}
+			action = ActionDisplay
 		}
 		if action == ActionAskForURL {
 			state.URL, ok = NewInput(state.Screen, "Enter URL:", state.URL).Focus()
@@ -425,18 +458,10 @@ func Run(ctx context.Context, state *State) {
 			action = ActionAskForURL
 		}
 		if action == ActionDisplay {
-			next, back, forward, err := state.History.Current().Focus()
+			next, back, forward, toggleBookmark, err := state.History.Current().Focus()
 			if err != nil {
 				NewOptions(state.Screen, fmt.Sprintf("Error processing link returned by server\n\nLink: %v\nMessage: %v", next, err), "OK").Focus()
 				action = ActionAskForURL
-				continue
-			}
-			if back {
-				state.History.Back()
-				continue
-			}
-			if forward {
-				state.History.Forward()
 				continue
 			}
 			if next != nil {
@@ -450,6 +475,18 @@ func Run(ctx context.Context, state *State) {
 				state.URL = next.String()
 				u = next
 				action = ActionNavigate
+				continue
+			}
+			if back {
+				state.History.Back()
+				continue
+			}
+			if forward {
+				state.History.Forward()
+				continue
+			}
+			if toggleBookmark {
+				action = ActionToggleBookmark
 				continue
 			}
 			action = ActionAskForURL
@@ -572,7 +609,7 @@ func (t *Text) Draw() (x, y int) {
 func NewOptions(s tcell.Screen, msg string, opts ...string) *Options {
 	cancelIndex := -1
 	for i, o := range opts {
-		if o == "Cancel" {
+		if o == "Cancel" || o == "Exit" {
 			cancelIndex = i
 			break
 		}
@@ -942,7 +979,7 @@ func (b *Browser) Draw() {
 	b.MinScrollY = (y * -1) + b.ScrollY + h + 1
 }
 
-func (b *Browser) Focus() (next *url.URL, back, forward bool, err error) {
+func (b *Browser) Focus() (next *url.URL, back, forward, toggleBookmark bool, err error) {
 	b.Draw()
 	b.Screen.Sync()
 	for {
@@ -986,6 +1023,9 @@ func (b *Browser) Focus() (next *url.URL, back, forward bool, err error) {
 				b.ScrollDown(5)
 			case tcell.KeyRune:
 				switch ev.Rune() {
+				case 'b':
+					toggleBookmark = true
+					return
 				case 'g':
 					b.ScrollY = 0
 				case 'G':
@@ -1014,14 +1054,21 @@ func (b *Browser) Focus() (next *url.URL, back, forward bool, err error) {
 	}
 }
 
-func NewHistory(size int, historyFileName string) (h *History, closer func(), err error) {
-	h = &History{
-		max:      size,
-		past:     []Visit{},
-		browsers: []*Browser{},
+func ParseVisit(s string) (v Visit, err error) {
+	parts := strings.SplitN(s, "\t", 2)
+	if len(parts) != 2 {
+		return
 	}
-	// Read past history.
-	lines, err := readLines(historyFileName)
+	v.Time, err = time.Parse(time.RFC3339, parts[0])
+	if err != nil {
+		return
+	}
+	v.URL = parts[1]
+	return
+}
+
+func readVisits(fileName string) (visits []Visit, err error) {
+	lines, err := readLines(fileName)
 	if err != nil {
 		return
 	}
@@ -1032,9 +1079,104 @@ func NewHistory(size int, historyFileName string) (h *History, closer func(), er
 			err = fmt.Errorf("history: couldn't parse visit: %w", err)
 			return
 		}
-		h.past = append(h.past, v)
+		visits = append(visits, v)
 	}
-	// Open file to add to history.Be
+	return
+}
+
+type Visit struct {
+	Time time.Time
+	URL  string
+}
+
+func (v Visit) TabDelimited() string {
+	return fmt.Sprintf("%s\t%s\n", v.Time.Format(time.RFC3339), v.URL)
+}
+
+func (v Visit) Gemini() string {
+	return fmt.Sprintf("=> %s (Visited: %s)\n", v.URL, v.Time.Format(time.RFC3339))
+}
+
+func NewBookmarks(fileName string) (b *Bookmarks, closer func() error, err error) {
+	b = &Bookmarks{
+		entries: map[string]Visit{},
+	}
+	// Read bookmarks.
+	visits, err := readVisits(fileName)
+	if err != nil {
+		return
+	}
+	for _, v := range visits {
+		b.entries[v.URL] = v
+	}
+	// Save file on close.
+	closer = func() error {
+		buf := new(bytes.Buffer)
+		for _, v := range b.entries {
+			fmt.Fprintf(buf, v.TabDelimited())
+		}
+		os.MkdirAll(path.Dir(fileName), os.ModePerm)
+		return atomic.WriteFile(fileName, buf)
+	}
+	return
+}
+
+type Bookmarks struct {
+	entries map[string]Visit
+}
+
+func (b *Bookmarks) Contains(u *url.URL) bool {
+	s := u.String()
+	_, ok := b.entries[s]
+	return ok
+}
+
+func (b *Bookmarks) Remove(u *url.URL) {
+	delete(b.entries, u.String())
+}
+
+func (b *Bookmarks) Add(u *url.URL) {
+	if u.Scheme == "min" {
+		return
+	}
+	s := u.String()
+	b.entries[s] = Visit{
+		URL:  u.String(),
+		Time: time.Now(),
+	}
+}
+
+func (b *Bookmarks) All() (u *url.URL, resp *gemini.Response) {
+	u = &url.URL{Scheme: "min", Opaque: "bookmarks"}
+	bdy := new(bytes.Buffer)
+	io.WriteString(bdy, "# Bookmarks\n\n")
+	var keys []string
+	for s := range b.entries {
+		keys = append(keys, s)
+	}
+	keys = sort.StringSlice(keys)
+	for _, key := range keys {
+		io.WriteString(bdy, b.entries[key].Gemini())
+	}
+	resp = &gemini.Response{
+		Header: &gemini.Header{Code: gemini.CodeSuccess},
+		Body:   ioutil.NopCloser(bdy),
+	}
+	return
+}
+
+func NewHistory(size int, historyFileName string) (h *History, closer func(), err error) {
+	h = &History{
+		max:      size,
+		past:     []Visit{},
+		browsers: []*Browser{},
+	}
+	// Read past history.
+	h.past, err = readVisits(historyFileName)
+	if err != nil {
+		return
+	}
+	// Open file to add to history.
 	h.f, err = os.OpenFile(historyFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
@@ -1052,32 +1194,6 @@ type History struct {
 	browsers []*Browser
 	index    int
 	f        *os.File
-}
-
-func ParseVisit(s string) (v Visit, err error) {
-	parts := strings.SplitN(s, "\t", 2)
-	if len(parts) != 2 {
-		return
-	}
-	v.Time, err = time.Parse(time.RFC3339, parts[0])
-	if err != nil {
-		return
-	}
-	v.URL = parts[1]
-	return
-}
-
-type Visit struct {
-	Time time.Time
-	URL  string
-}
-
-func (v Visit) TabDelimited() string {
-	return fmt.Sprintf("%s\t%s\n", v.Time.Format(time.RFC3339), v.URL)
-}
-
-func (v Visit) Gemini() string {
-	return fmt.Sprintf("=> %s (Visited: %s)\n", v.URL, v.Time.Format(time.RFC3339))
 }
 
 func (h *History) Current() (b *Browser) {
