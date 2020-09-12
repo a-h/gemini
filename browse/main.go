@@ -222,8 +222,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Fini()
-
-	// Set default colours.
 	s.SetStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorBlack))
@@ -317,7 +315,6 @@ func Run(ctx context.Context, state *State) {
 				action = ActionHome
 				continue
 			}
-			// Check the URL.
 			u, err = url.Parse(state.URL)
 			if err != nil {
 				NewOptions(state.Screen, fmt.Sprintf("Error parsing URL\n\nURL: %v\nMessage: %v", state.URL, err), "Continue").Focus()
@@ -328,7 +325,6 @@ func Run(ctx context.Context, state *State) {
 			continue
 		}
 		if action == ActionNavigate {
-			// Connect.
 			var resp *gemini.Response
 			var certificates []string
 		out:
@@ -337,7 +333,6 @@ func Run(ctx context.Context, state *State) {
 				if err != nil {
 					switch NewOptions(state.Screen, fmt.Sprintf("Error making request\n\nURL: %v\nMessage: %v", u, err), "Retry", "Cancel").Focus() {
 					case "Retry":
-						action = ActionNavigate
 						continue
 					case "Cancel":
 						break out
@@ -350,11 +345,9 @@ func Run(ctx context.Context, state *State) {
 						state.Conf.HostCertificates[u.Host] = certificates[0]
 						state.Conf.Save()
 						state.Client.AddServerCertificate(u.Host, certificates[0])
-						action = ActionNavigate
 						continue
 					case "Accept (Temporary)":
 						state.Client.AddServerCertificate(u.Host, certificates[0])
-						action = ActionNavigate
 						continue
 					case "Reject":
 						break out
@@ -362,8 +355,13 @@ func Run(ctx context.Context, state *State) {
 				}
 				break
 			}
-			if !ok || resp == nil {
-				action = ActionAskForURL
+			if resp == nil {
+				state.History.Back()
+				if state.History.Current() == nil {
+					action = ActionHome
+					continue
+				}
+				action = ActionDisplay
 				continue
 			}
 			if strings.HasPrefix(string(resp.Header.Code), "3") { // Redirect
@@ -1235,13 +1233,18 @@ func (h *History) Forward() {
 }
 
 func (h *History) Add(b *Browser) error {
+	// If we've gone back, remove future URLs and replace with this.
+	if h.index < len(h.browsers)-1 {
+		h.browsers = h.browsers[0 : h.index+1]
+	}
+	// Remove an browsers that are over the max count.
 	if len(h.browsers) == h.max && h.max > 0 {
 		h.browsers = h.browsers[1:]
 	}
 	h.browsers = append(h.browsers, b)
 	h.index = len(h.browsers) - 1
+	// Persist it, if it's not history or bookmarks.
 	if b.URL.Scheme == "min" {
-		// Don't save the fact that we viewed history or bookmarks.
 		return nil
 	}
 	v := Visit{
