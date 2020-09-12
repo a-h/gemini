@@ -248,6 +248,11 @@ const (
 	ActionNavigate       Action = "Navigate"
 	ActionDisplay        Action = "Display"
 	ActionToggleBookmark Action = "ToggleBookmark"
+	ActionViewHistory    Action = "ViewHistory"
+	ActionViewBookmarks  Action = "ViewBookmarks"
+	ActionGoBack         Action = "Back"
+	ActionGoForward      Action = "Forward"
+	ActionViewHelp       Action = "Help"
 )
 
 func Run(ctx context.Context, state *State) {
@@ -258,35 +263,41 @@ func Run(ctx context.Context, state *State) {
 	var u *url.URL
 	for {
 		if action == ActionHome {
-			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "View Bookmarks", "Exit").Focus() {
+			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "View Bookmarks", "Help", "Exit").Focus() {
 			case "Enter URL":
 				action = ActionAskForURL
-				continue
 			case "View History":
-				hu, hr := state.History.All()
-				b, err := NewBrowser(state.Screen, state.Conf.Width, hu, hr)
-				if err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Error viewing history: %v", err), "Continue").Focus()
-					continue
-				}
-				if err = state.History.Add(b); err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
-				}
-				action = ActionDisplay
-				continue
+				action = ActionViewHistory
 			case "View Bookmarks":
-				hu, hr := state.Bookmarks.All()
-				b, err := NewBrowser(state.Screen, state.Conf.Width, hu, hr)
-				if err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Error viewing bookmarks: %v", err), "Continue").Focus()
-					continue
-				}
-				state.History.Add(b)
-				action = ActionDisplay
-				continue
+				action = ActionViewBookmarks
+			case "Help":
+				action = ActionViewHelp
 			case "Exit":
 				return
 			}
+			continue
+		}
+		if action == ActionViewBookmarks || action == ActionViewHelp || action == ActionViewHistory {
+			var vu *url.URL
+			var vr *gemini.Response
+			switch action {
+			case ActionViewHistory:
+				vu, vr = state.History.All()
+			case ActionViewBookmarks:
+				vu, vr = state.Bookmarks.All()
+			case ActionViewHelp:
+				vu, vr = Help()
+			}
+			b, err := NewBrowser(state.Screen, state.Conf.Width, vu, vr)
+			if err != nil {
+				NewOptions(state.Screen, fmt.Sprintf("Error loading %v: %v", b.URL.String(), err), "Continue").Focus()
+				continue
+			}
+			if err = state.History.Add(b); err != nil {
+				NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
+			}
+			action = ActionDisplay
+			continue
 		}
 		if action == ActionToggleBookmark {
 			if state.Bookmarks.Contains(u) {
@@ -458,38 +469,35 @@ func Run(ctx context.Context, state *State) {
 			action = ActionAskForURL
 		}
 		if action == ActionDisplay {
-			next, back, forward, toggleBookmark, err := state.History.Current().Focus()
+			browserAction, navigateTo, err := state.History.Current().Focus()
 			if err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Error processing link returned by server\n\nLink: %v\nMessage: %v", next, err), "OK").Focus()
+				NewOptions(state.Screen, fmt.Sprintf("Error processing link returned by server\n\nLink: %v\nMessage: %v", navigateTo, err), "OK").Focus()
 				action = ActionAskForURL
 				continue
 			}
-			if next != nil {
-				if next.Scheme != "gemini" {
-					if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", next.String()), "Yes", "No").Focus(); open == "Yes" {
-						browser.OpenURL(next.String())
-					}
-					state.History.Back()
-					continue
-				}
-				state.URL = next.String()
-				u = next
-				action = ActionNavigate
-				continue
-			}
-			if back {
+			switch browserAction {
+			case ActionGoBack:
 				state.History.Back()
 				continue
-			}
-			if forward {
+			case ActionGoForward:
 				state.History.Forward()
 				continue
+			case ActionNavigate:
+				if navigateTo != nil {
+					if navigateTo.Scheme != "gemini" {
+						if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", navigateTo.String()), "Yes", "No").Focus(); open == "Yes" {
+							browser.OpenURL(navigateTo.String())
+						}
+						state.History.Back()
+						continue
+					}
+					state.URL = navigateTo.String()
+					u = navigateTo
+					action = ActionNavigate
+					continue
+				}
 			}
-			if toggleBookmark {
-				action = ActionToggleBookmark
-				continue
-			}
-			action = ActionAskForURL
+			action = browserAction
 			continue
 		}
 	}
@@ -800,9 +808,9 @@ func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
 }
 
 func (l LinkLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	ls := tcell.StyleDefault.Foreground(tcell.ColorBlue)
+	ls := tcell.StyleDefault.Foreground(tcell.ColorDarkCyan)
 	if highlighted {
-		ls = ls.Underline(true)
+		ls = ls.Background(tcell.ColorWhite).Foreground(tcell.ColorDarkCyan)
 	}
 	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(ls).Draw()
 }
@@ -979,7 +987,7 @@ func (b *Browser) Draw() {
 	b.MinScrollY = (y * -1) + b.ScrollY + h + 1
 }
 
-func (b *Browser) Focus() (next *url.URL, back, forward, toggleBookmark bool, err error) {
+func (b *Browser) Focus() (next Action, navigateTo *url.URL, err error) {
 	b.Draw()
 	b.Screen.Sync()
 	for {
@@ -997,7 +1005,8 @@ func (b *Browser) Focus() (next *url.URL, back, forward, toggleBookmark bool, er
 			case tcell.KeyCtrlO:
 				b.PreviousLink()
 			case tcell.KeyEnter:
-				next, err = b.CurrentLink()
+				next = ActionNavigate
+				navigateTo, err = b.CurrentLink()
 				return
 			case tcell.KeyHome:
 				b.ScrollX = 0
@@ -1021,20 +1030,26 @@ func (b *Browser) Focus() (next *url.URL, back, forward, toggleBookmark bool, er
 				b.ScrollUp(5)
 			case tcell.KeyPgDn:
 				b.ScrollDown(5)
+			case tcell.KeyCtrlH:
+				next = ActionViewHistory
+				return
 			case tcell.KeyRune:
 				switch ev.Rune() {
 				case 'b':
-					toggleBookmark = true
+					next = ActionToggleBookmark
+					return
+				case 'B':
+					next = ActionViewBookmarks
 					return
 				case 'g':
 					b.ScrollY = 0
 				case 'G':
 					b.ScrollY = b.MinScrollY
 				case 'H':
-					back = true
+					next = ActionGoBack
 					return
 				case 'L':
-					forward = true
+					next = ActionGoForward
 					return
 				case 'h':
 					b.ScrollLeft(1)
@@ -1046,6 +1061,9 @@ func (b *Browser) Focus() (next *url.URL, back, forward, toggleBookmark bool, er
 					b.ScrollRight(1)
 				case 'n':
 					b.NextLink()
+				case '?':
+					next = ActionViewHelp
+					return
 				}
 			}
 		}
@@ -1429,4 +1447,61 @@ func split(s string, at int) (prefix, suffix string) {
 func insert(s string, at int, r rune) string {
 	prefix, suffix := split(s, at)
 	return prefix + string(r) + suffix
+}
+
+func Help() (u *url.URL, resp *gemini.Response) {
+	u = &url.URL{Scheme: "min", Opaque: "help"}
+	buf := bytes.NewBufferString(`# Help
+
+## Navigation
+
+n/Tab            Next link / option
+Ctrl-O/Shift+Tab Previous link / option
+Enter            Navigate to selected link
+H                Navigate backwards in history
+L                Navigate forwards in history
+Esc              Exit
+
+## Features
+
+b                Toggle bookmark
+B                View bookmarks
+Ctrl-H           View history
+?                View help
+
+## Scrolling
+
+g                Scroll to top of document
+G                Scroll to end of document
+←/h              Scroll left
+↓/j              Scroll down
+↑/k              Scroll up
+→/l              Scroll right
+Home             Scroll home horizontally
+End              Scroll end horizontally
+Ctrl-U           Scroll up half a screen
+Ctrl-D           Scroll down half a screen
+
+## Configuration
+
+### config.ini
+
+* Stored at $HOME/.min/config.ini
+* Consists of key/value pairs (e.g. "width=80")
+* Contains previously accepted server certificates
+* Contains links to client certificates, stored in the same directory
+
+## history.tsv
+
+* Stores previously visited URLs
+
+## boomarks.tsv
+
+* Stores bookmarks
+`)
+	resp = &gemini.Response{
+		Header: &gemini.Header{Code: gemini.CodeSuccess},
+		Body:   ioutil.NopCloser(buf),
+	}
+	return
 }
