@@ -50,7 +50,7 @@ To see help text, you can run:
 examples:
 
   gemini request --insecure --verbose gemini://example.com/pass
-  gemini serve --host=example.com --certFile=a.crt --keyFile=a.key --path=.`)
+  gemini serve --domain=example.com --certFile=server.crt --keyFile=server.key --path=.`)
 	os.Exit(1)
 }
 
