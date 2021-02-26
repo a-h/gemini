@@ -179,7 +179,7 @@ func (srv *Server) serveInsecure(l net.Listener) (err error) {
 
 func (srv *Server) serveTLS(l net.Listener) (err error) {
 	config := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
+		MinVersion:         tls.VersionTLS12,
 		ClientAuth:         tls.RequestClientCert,
 		InsecureSkipVerify: true,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
