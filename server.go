@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
+
+	"github.com/a-h/gemini/log"
 )
 
 // Handler of Gemini content.
@@ -114,10 +116,6 @@ type Server struct {
 	HandlerTimeout  time.Duration
 }
 
-func (srv *Server) logf(format string, v ...interface{}) {
-	log.Printf(format, v...)
-}
-
 // Set the server listening on the specified port.
 func (srv *Server) ListenAndServe() error {
 	// Don't start if the server is already closing down.
@@ -128,7 +126,7 @@ func (srv *Server) ListenAndServe() error {
 	if addr == "" {
 		addr = ":1965"
 	}
-	srv.logf("gemini: starting on %v", addr)
+	log.Info("gemini: starting", log.String("addr", addr))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -137,15 +135,15 @@ func (srv *Server) ListenAndServe() error {
 	if srv.Insecure {
 		err = srv.serveInsecure(ln)
 		if err != nil {
-			srv.logf("gemini: failure in serveInsecure")
+			log.Error("gemini: serveInsecure failure", err, log.String("addr", addr))
 		}
 	} else {
 		err = srv.serveTLS(ln)
 		if err != nil {
-			srv.logf("gemini: failure in serveTLS: %v", err)
+			log.Error("gemini: serveTLS failure", err, log.String("addr", addr))
 		}
 	}
-	srv.logf("gemini: stopped")
+	log.Info("gemini: stopped")
 	return err
 }
 
@@ -162,12 +160,12 @@ func (srv *Server) serveInsecure(l net.Listener) (err error) {
 	}
 	for {
 		if err = srv.Context.Err(); err != nil {
-			srv.logf("gemini: context caused shutdown: %v", err)
+			log.Error("gemini: context caused shutdown", err)
 			return err
 		}
 		rw, err := l.Accept()
 		if err != nil {
-			srv.logf("gemini: insecure listener error: %v", err)
+			log.Error("gemini: insecure listener error", err)
 			continue
 		}
 		go func() {
@@ -196,12 +194,12 @@ func (srv *Server) serveTLS(l net.Listener) (err error) {
 	tlsListener := tls.NewListener(l, config)
 	for {
 		if err = srv.Context.Err(); err != nil {
-			srv.logf("gemini: context caused shutdown: %v", err)
+			log.Error("gemini: context caused shutdown", err)
 			return err
 		}
 		conn, err := tlsListener.Accept()
 		if err != nil {
-			srv.logf("gemini: tls listener error: %v", err)
+			log.Error("gemini: tls listener error", err)
 			continue
 		}
 		tlsConn, ok := conn.(*tls.Conn)
@@ -215,7 +213,7 @@ func (srv *Server) serveTLS(l net.Listener) (err error) {
 func (srv *Server) handleTLS(conn *tls.Conn) {
 	defer conn.Close()
 	if err := conn.Handshake(); err != nil {
-		srv.logf("gemini: failed TLS handshake from %s: %v", conn.RemoteAddr(), err)
+		log.Info("gemini: failed TLS handshake", log.String("remote", conn.RemoteAddr().String()), log.String("reason", err.Error()))
 		return
 	}
 	var certificate Certificate
@@ -235,7 +233,7 @@ func (srv *Server) handleTLS(conn *tls.Conn) {
 	serverName := conn.ConnectionState().ServerName
 	dh, ok := srv.DomainToHandler[serverName]
 	if !ok {
-		srv.logf("gemini: failed to find domain handler for serverName: %q", serverName)
+		log.Warn("gemini: failed to find domain handler", log.String("serverName", serverName))
 	}
 	srv.handle(dh, certificate, conn)
 }
@@ -246,11 +244,10 @@ func (srv *Server) handle(dh *DomainHandler, certificate Certificate, conn net.C
 	conn.SetReadDeadline(time.Now().Add(srv.ReadTimeout))
 	r, ok, err := srv.parseRequest(conn)
 	if err != nil {
-		srv.logf("gemini: failed to parse request: %v", err)
+		log.Info("gemini: failed to parse request", log.String("reason", err.Error()))
 		return
 	}
 	if !ok {
-		srv.logf("gemini: could not parse request")
 		return
 	}
 	r.Certificate = certificate
@@ -261,7 +258,7 @@ func (srv *Server) handle(dh *DomainHandler, certificate Certificate, conn net.C
 	w := NewWriter(conn)
 	defer func() {
 		if p := recover(); p != nil {
-			srv.logf("gemini: server error: %v: %v", r.URL.Path, p)
+			log.Error("gemini: server error", nil, log.String("url", r.URL.String()), log.Interface("recover", p))
 			w.SetHeader(CodeCGIError, "internal error")
 		}
 	}()
@@ -271,10 +268,18 @@ func (srv *Server) handle(dh *DomainHandler, certificate Certificate, conn net.C
 	}
 	dh.Handler.ServeGemini(w, r)
 	if w.Code == "" {
-		srv.logf("gemini: handler for %q resulted in empty response, sending empty document", r.URL.Path)
+		log.Error("gemini: handler resulted in empty response", nil, log.String("url", r.URL.String()), log.String("handlerType", reflect.TypeOf(dh.Handler).PkgPath()))
 		w.SetHeader(CodeCGIError, "empty response")
 	}
-	srv.logf("gemini: %v response: %v time: %v", r.URL.Path, w.Code, time.Now().Sub(start))
+	duration := time.Now().Sub(start)
+	log.Info("gemini: response",
+		log.String("url", r.URL.String()),
+		log.String("path", r.URL.Path),
+		log.String("code", w.Code),
+		log.String("handlerType", reflect.TypeOf(dh.Handler).PkgPath()),
+		log.Int64("ms", duration.Milliseconds()),
+		log.Int64("us", int64(duration.Microseconds())),
+	)
 }
 
 func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err error) {
@@ -284,17 +289,18 @@ func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err erro
 		return
 	}
 	if !ok {
+		log.Info("gemini: request too long or malformed", log.String("request", string(request)))
 		writeHeaderToWriter(CodeBadRequest, "request too long or malformed", rw)
 		return
 	}
 	ok = false
 	url, err := url.Parse(strings.TrimSpace(string(request)))
 	if err != nil {
-		srv.logf("gemini: malformed request: %q", string(request))
+		log.Info("gemini: malformed request", log.String("request", string(request)))
 		writeHeaderToWriter(CodeBadRequest, "request malformed", rw)
 		return
 	}
-	srv.logf("gemini: received request: %s", url)
+	log.Info("gemini: received request", log.String("request", url.String()))
 	r = &Request{
 		URL: url,
 	}

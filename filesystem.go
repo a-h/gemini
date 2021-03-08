@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/a-h/gemini/log"
 )
 
 type Dir string
@@ -48,7 +50,7 @@ func DirectoryListingHandler(path string, f File) Handler {
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		files, err := f.Readdir(-1)
 		if err != nil {
-			//TODO: Log.
+			log.Error("DirectoryListingHandler: readdir failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "readdir failed")
 			return
 		}
@@ -90,13 +92,13 @@ func FileSystemHandler(fs FileSystem) Handler {
 		}
 		f, err := fs.Open(r.URL.Path)
 		if err != nil {
-			//TODO: Log.
+			log.Error("FileSystemHandler: file open failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "file open failed")
 			return
 		}
 		stat, err := f.Stat()
 		if err != nil {
-			//TODO: Log.
+			log.Error("FileSystemHandler: file stat failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "file stat failed")
 			return
 		}

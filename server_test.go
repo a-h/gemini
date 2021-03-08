@@ -2,10 +2,13 @@ package gemini
 
 import (
 	"bytes"
+	"context"
 	"io/ioutil"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServer(t *testing.T) {
@@ -186,6 +189,7 @@ func TestServer(t *testing.T) {
 				DomainToHandler: map[string]*DomainHandler{
 					"": dh,
 				},
+				Context: context.Background(),
 			}
 			s.handle(dh, tt.cert, rec)
 
@@ -240,4 +244,28 @@ func (rec *Recorder) Read(p []byte) (n int, err error) {
 	n, err = rec.request.Read(p)
 	rec.read += n
 	return n, err
+}
+
+func (rec *Recorder) Close() error {
+	return nil
+}
+
+func (rec *Recorder) LocalAddr() net.Addr {
+	return &net.IPAddr{}
+}
+
+func (rec *Recorder) RemoteAddr() net.Addr {
+	return &net.IPAddr{}
+}
+
+func (rec *Recorder) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (rec *Recorder) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (rec *Recorder) SetWriteDeadline(t time.Time) error {
+	return nil
 }
