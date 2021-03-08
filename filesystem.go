@@ -50,7 +50,7 @@ func DirectoryListingHandler(path string, f File) Handler {
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		files, err := f.Readdir(-1)
 		if err != nil {
-			log.Error("DirectoryListingHandler: readdir failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
+			log.Warn("DirectoryListingHandler: readdir failed", log.String("reason", err.Error()), log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "readdir failed")
 			return
 		}
@@ -92,20 +92,21 @@ func FileSystemHandler(fs FileSystem) Handler {
 		}
 		f, err := fs.Open(r.URL.Path)
 		if err != nil {
-			log.Error("FileSystemHandler: file open failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
+			log.Warn("FileSystemHandler: file open failed", log.String("reason", err.Error()), log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "file open failed")
 			return
 		}
 		stat, err := f.Stat()
 		if err != nil {
-			log.Error("FileSystemHandler: file stat failed", err, log.String("path", r.URL.Path), log.String("url", r.URL.String()))
+			log.Warn("FileSystemHandler: file stat failed", log.String("reason", err.Error()), log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "file stat failed")
 			return
 		}
 		if stat.IsDir() {
 			// Look for index.gmi first before listing contents.
 			if !strings.HasSuffix(r.URL.Path, "/") {
-				r.URL.Path += "/"
+				RedirectPermanentHandler(r.URL.Path+"/").ServeGemini(w, r)
+				return
 			}
 			index, err := fs.Open(r.URL.Path + "index.gmi")
 			if errors.Is(err, os.ErrNotExist) {

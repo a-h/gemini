@@ -20,8 +20,14 @@ func TestFileSystemHandler(t *testing.T) {
 		expectedBody   string
 	}{
 		{
-			name:           "if a directory contains index.gmi, it is used",
+			name:           "directories without a trailing slash are redirected",
 			url:            "/a",
+			expectedHeader: Header{Code: CodeRedirectPermanent, Meta: "/a/"},
+			expectedBody:   "",
+		},
+		{
+			name:           "if a directory contains index.gmi, it is used",
+			url:            "/a/",
 			expectedHeader: geminiSuccessHeader,
 			expectedBody:   "# /tests/a/index.gmi\n",
 		},
@@ -39,7 +45,7 @@ func TestFileSystemHandler(t *testing.T) {
 		},
 		{
 			name:           "if a directory does not contain an index, a listing is returned",
-			url:            "/b",
+			url:            "/b/",
 			expectedHeader: geminiSuccessHeader,
 			expectedBody: `# Index of /b/
 
