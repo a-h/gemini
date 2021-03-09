@@ -7,7 +7,7 @@ Applications and libraries for building applications on Gemini (see https://gemi
 ### Run a server
 
 ```sh
-gemini serve --host=example.com --certFile=a.crt --keyFile=a.key --path=.
+gemini serve --domain=example.com --certFile=a.crt --keyFile=a.key --path=.
 ```
 
 ### Request content
