@@ -92,6 +92,10 @@ func FileSystemHandler(fs FileSystem) Handler {
 		}
 		f, err := fs.Open(r.URL.Path)
 		if err != nil {
+			if os.IsNotExist(err) {
+				NotFoundHandler().ServeGemini(w, r)
+				return
+			}
 			log.Warn("FileSystemHandler: file open failed", log.String("reason", err.Error()), log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			w.SetHeader(CodeTemporaryFailure, "file open failed")
 			return

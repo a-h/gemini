@@ -149,7 +149,7 @@ func TestServer(t *testing.T) {
 			expectedBodyErr:   nil,
 		},
 		{
-			name:    "panics in handlers return a GCI error",
+			name:    "panics in handlers return a CGI error",
 			request: "gemini://sensible\r\n",
 			handler: func(w ResponseWriter, r *Request) {
 				panic("oops")

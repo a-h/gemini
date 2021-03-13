@@ -38,6 +38,15 @@ func TestFileSystemHandler(t *testing.T) {
 			expectedBody:   "# /tests/a/index.gmi\n",
 		},
 		{
+			name: "non-existent files return a 51 status code",
+			url:  "/a/non-existent.gmi",
+			expectedHeader: Header{
+				Code: CodeNotFound,
+				Meta: "",
+			},
+			expectedBody: "",
+		},
+		{
 			name:           "a slash prefix is added if missing",
 			url:            "a/index.gmi",
 			expectedHeader: geminiSuccessHeader,
