@@ -76,14 +76,17 @@ func FileContentHandler(name string, f File) Handler {
 			mType = DefaultMIMEType
 		}
 		w.SetHeader(CodeSuccess, mType)
-		io.Copy(w, f)
+		if _, err := io.Copy(w, f); err != nil {
+			log.Error("FileContentHandler: failed to write file", err, log.String("fileName", name))
+			panic("error returning file contents")
+		}
 	})
 }
 
 func FileSystemHandler(fs FileSystem) Handler {
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		if strings.Contains(r.URL.Path, "..") {
-			// Possible directory traversal attack.
+			log.Warn("FileSystemHandler: possible directory traversal attack", log.String("path", r.URL.Path), log.String("url", r.URL.String()))
 			BadRequest(w, r)
 			return
 		}
