@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/signal"
@@ -71,6 +72,7 @@ func request(args []string) {
 	keyFileFlag := cmd.String("keyFile", "", "Path to a client key file (must also set certFile if this is used).")
 	verboseFlag := cmd.Bool("verbose", false, "Print both headers and body.")
 	headersFlag := cmd.Bool("headers", false, "Print only the headers.")
+	allowBinaryFlag := cmd.Bool("allowBinary", false, "Set to true to enable printing binary to the console.")
 	helpFlag := cmd.Bool("help", false, "Print help and exit.")
 	err := cmd.Parse(args)
 	if err != nil || *helpFlag {
@@ -127,16 +129,28 @@ func request(args []string) {
 	if *verboseFlag || *headersFlag {
 		fmt.Printf("%v %v\r\n", resp.Header.Code, resp.Header.Meta)
 	}
-	if *headersFlag != true {
-		s := bufio.NewScanner(resp.Body)
-		for s.Scan() {
-			fmt.Println(s.Text())
-		}
-		if s.Err() != nil {
-			fmt.Printf("Error reading response body: %v\n", s.Err())
+	if *headersFlag != true && !gemini.IsErrorCode(resp.Header.Code) {
+		if strings.HasPrefix(resp.Header.Meta, "text/") {
+			s := bufio.NewScanner(resp.Body)
+			for s.Scan() {
+				fmt.Println(s.Text())
+			}
+			if s.Err() != nil {
+				fmt.Printf("Error reading response body: %v\n", s.Err())
+				os.Exit(1)
+			}
+			defer resp.Body.Close()
+		} else if *allowBinaryFlag {
+			_, err := io.Copy(os.Stdout, resp.Body)
+			if err != nil {
+				fmt.Printf("Error reading binary response body: %v\n", err)
+				os.Exit(1)
+			}
+			defer resp.Body.Close()
+		} else {
+			fmt.Println("Binary output skipped, set allowBinary to allow.")
 			os.Exit(1)
 		}
-		defer resp.Body.Close()
 	}
 	if gemini.IsErrorCode(resp.Header.Code) {
 		os.Exit(1)
