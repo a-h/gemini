@@ -269,3 +269,51 @@ func (rec *Recorder) SetReadDeadline(t time.Time) error {
 func (rec *Recorder) SetWriteDeadline(t time.Time) error {
 	return nil
 }
+
+func TestWriter(t *testing.T) {
+	var tests = []struct {
+		name  string
+		write [][]byte
+	}{
+		{
+			name: "single write",
+			write: [][]byte{
+				{0, 0},
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			w := NewWriter(buf)
+			for i := 0; i < len(tt.write); i++ {
+				n, err := w.Write(tt.write[i])
+				if err != nil {
+					t.Errorf("[%d] unexpected error writing: %v", i, err)
+				}
+				if n != len(tt.write[i]) {
+					t.Errorf("[%d] expected to write %d bytes, wrote %d", i, len(tt.write[i]), n)
+				}
+			}
+			headerAndBody := bytes.SplitN(buf.Bytes(), []byte("\r\n"), 2)
+			header := headerAndBody[0]
+			body := headerAndBody[1]
+			expected := bytes.Join(tt.write, nil)
+			if !reflect.DeepEqual(body, expected) {
+				t.Errorf("mismatched body, expected %x, got %x", expected, body)
+			}
+			if w.WrittenBody != int64(len(expected)) {
+				t.Errorf("expected the 'Written' field to be the %d bytes written to the body, but got %d", len(expected), w.WrittenBody)
+			}
+			expectedHeader := "20 " + DefaultMIMEType + "\r\n"
+			if w.WrittenHeader != len(expectedHeader) {
+				t.Errorf("expected to write header length %d, got %d", len(expectedHeader), w.WrittenHeader)
+			}
+			if string(header)+"\r\n" != expectedHeader {
+				t.Errorf("expected header %q, got %q", expectedHeader, header)
+			}
+		})
+	}
+
+}

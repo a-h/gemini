@@ -279,6 +279,9 @@ func (srv *Server) handle(dh *DomainHandler, certificate Certificate, conn net.C
 		log.String("handlerType", reflect.TypeOf(dh.Handler).PkgPath()),
 		log.Int64("ms", duration.Milliseconds()),
 		log.Int64("us", int64(duration.Microseconds())),
+		log.Int64("lenBody", w.WrittenBody),
+		log.Int("lenHeader", w.WrittenHeader),
+		log.Int64("len", int64(w.WrittenHeader)+w.WrittenBody),
 	)
 }
 
@@ -309,8 +312,10 @@ func (srv *Server) parseRequest(rw io.ReadWriter) (r *Request, ok bool, err erro
 
 // Writer passed to Gemini handlers.
 type Writer struct {
-	Code   string
-	Writer io.Writer
+	Code          string
+	Writer        io.Writer
+	WrittenHeader int
+	WrittenBody   int64
 }
 
 // NewWriter creates a new Gemini writer.
@@ -332,7 +337,9 @@ func (gw *Writer) Write(p []byte) (n int, err error) {
 		err = ErrCannotWriteBodyWithoutSuccessCode
 		return
 	}
-	return gw.Writer.Write(p)
+	n, err = gw.Writer.Write(p)
+	gw.WrittenBody += int64(n)
+	return
 }
 
 func isSuccessCode(code Code) bool {
@@ -347,10 +354,13 @@ func (gw *Writer) SetHeader(code Code, meta string) (err error) {
 		return ErrHeaderAlreadyWritten
 	}
 	gw.Code = string(code)
-	return writeHeaderToWriter(code, meta, gw.Writer)
+	var n int
+	n, err = writeHeaderToWriter(code, meta, gw.Writer)
+	gw.WrittenHeader += n
+	return
 }
 
-func writeHeaderToWriter(code Code, meta string, w io.Writer) error {
+func writeHeaderToWriter(code Code, meta string, w io.Writer) (n int, err error) {
 	// <STATUS><SPACE><META><CR><LF>
 	// Set default meta if required.
 	if meta == "" && isSuccessCode(code) {
@@ -359,8 +369,7 @@ func writeHeaderToWriter(code Code, meta string, w io.Writer) error {
 	if len(meta) > 1024 {
 		meta = meta[:1024]
 	}
-	_, err := w.Write([]byte(string(code) + " " + meta + "\r\n"))
-	return err
+	return w.Write([]byte(string(code) + " " + meta + "\r\n"))
 }
 
 // DomainHandler handles incoming requests for the ServerName using the provided KeyPair certificate
