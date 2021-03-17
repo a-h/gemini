@@ -330,7 +330,7 @@ var ErrCannotWriteBodyWithoutSuccessCode = errors.New("gemini: cannot write body
 func (gw *Writer) Write(p []byte) (n int, err error) {
 	if gw.Code == "" {
 		// Section 3.3
-		gw.SetHeader(CodeSuccess, "")
+		gw.SetHeader(CodeSuccess, DefaultMIMEType)
 		gw.Code = CodeSuccess
 	}
 	if !isSuccessCode(Code(gw.Code)) {

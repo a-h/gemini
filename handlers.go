@@ -7,7 +7,7 @@ import (
 
 // BadRequest responds with a 59 status.
 func BadRequest(w ResponseWriter, r *Request) {
-	w.SetHeader(CodeBadRequest, "")
+	w.SetHeader(CodeBadRequest, "bad request")
 }
 
 // BadRequestHandler creates a handler that returns a bad request code (59).
@@ -17,7 +17,7 @@ func BadRequestHandler() Handler {
 
 // NotFound responds with a 51 status.
 func NotFound(w ResponseWriter, r *Request) {
-	w.SetHeader(CodeNotFound, "")
+	w.SetHeader(CodeNotFound, "not found")
 }
 
 // NotFoundHandler creates a handler that returns not found.
@@ -68,11 +68,11 @@ func RequireCertificateHandler(h Handler, authoriser func(certID, certKey string
 	}
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		if r.Certificate.ID == "" {
-			w.SetHeader(CodeClientCertificateRequired, "")
+			w.SetHeader(CodeClientCertificateRequired, "client certificate required")
 			return
 		}
 		if !authoriser(r.Certificate.ID, r.Certificate.Key) {
-			w.SetHeader(CodeClientCertificateNotAuthorised, "")
+			w.SetHeader(CodeClientCertificateNotAuthorised, "not authorised")
 			return
 		}
 		h.ServeGemini(w, r)

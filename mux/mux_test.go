@@ -24,18 +24,19 @@ func TestMux(t *testing.T) {
 			requestURL:    "/not_found",
 			expectedHeader: gemini.Header{
 				Code: gemini.CodeNotFound,
+				Meta: "not found",
 			},
 		},
 		{
 			name: "matching routes go to the correct handler",
 			routeHandlers: []*RouteHandler{
-				&RouteHandler{
+				{
 					Route: NewRoute("/route/a"),
 					Handler: gemini.HandlerFunc(func(w gemini.ResponseWriter, r *gemini.Request) {
 						w.Write([]byte("a"))
 					}),
 				},
-				&RouteHandler{
+				{
 					Route: NewRoute("/route/b"),
 					Handler: gemini.HandlerFunc(func(w gemini.ResponseWriter, r *gemini.Request) {
 						w.Write([]byte("b"))
@@ -52,7 +53,7 @@ func TestMux(t *testing.T) {
 		{
 			name: "route information is available to the handler",
 			routeHandlers: []*RouteHandler{
-				&RouteHandler{
+				{
 					Route: NewRoute("/user/{id}/{section}"),
 					Handler: gemini.HandlerFunc(func(w gemini.ResponseWriter, r *gemini.Request) {
 						mr, ok := GetMatchedRoute(r.Context)

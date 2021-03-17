@@ -45,7 +45,7 @@ func TestFileSystemHandler(t *testing.T) {
 			url:  "/a/non-existent.gmi",
 			expectedHeader: Header{
 				Code: CodeNotFound,
-				Meta: "",
+				Meta: "not found",
 			},
 			expectedBody: "",
 		},
@@ -71,6 +71,7 @@ func TestFileSystemHandler(t *testing.T) {
 			url:  "../a/index.gmi",
 			expectedHeader: Header{
 				Code: CodeBadRequest,
+				Meta: "bad request",
 			},
 		},
 	}
