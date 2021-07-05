@@ -1,3 +1,6 @@
+build:
+	go build -o gemini ./cmd/main.go
+
 build-docker:
 	docker build . -t adrianhesketh/gemini
 
