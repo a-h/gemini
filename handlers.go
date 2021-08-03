@@ -79,6 +79,19 @@ func RequireCertificateHandler(h Handler, authoriser func(certID, certKey string
 	})
 }
 
+// RequireInputHandler returns a handler that enforces all incoming requests have a populated
+// querystring.
+// `prompt` is returned as response META if input is not provided.
+func RequireInputHandler(h Handler, prompt string) Handler {
+	return HandlerFunc(func(w ResponseWriter, r *Request) {
+		if r.URL.RawQuery == "" {
+			w.SetHeader(CodeInput, prompt)
+			return
+		}
+		h.ServeGemini(w, r)
+	})
+}
+
 // AuthoriserAllowAll allows any authenticated user to access the handler.
 func AuthoriserAllowAll(id, key string) bool {
 	return true
