@@ -1,18 +1,6 @@
 package gemini
 
 // DocumentBuilder allows programatic document creation using the builder pattern.
-//
-// Example:
-// ```
-// document := NewDocumentBuilder()
-// document.AddH1Header("Hello world!")
-// document.AddLine("Reasons to use this builder:")
-// document.AddBullet("It's easy to use.")
-// document.AddBullet("it's easy to grok the code!")
-// document.AddLink("/about", "click here for more!")
-//
-// responseWriter.Write(document.Build())
-// ```
 type DocumentBuilder struct {
 	body string
 }
