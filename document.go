@@ -1,8 +1,11 @@
 package gemini
 
 // DocumentBuilder allows programatic document creation using the builder pattern.
+// DocumentBuilder supports the use of headers and footers, which combined with the body at build time.
 type DocumentBuilder struct {
+    header string
 	body string
+	footer string
 }
 
 // Instantiate a new DocumentBuilder.
@@ -10,14 +13,27 @@ func NewDocumentBuilder() DocumentBuilder {
 	return DocumentBuilder{}
 }
 
+// Ensures any string passed through this function will be terminated with a newline
+func ensureNewlineTerminated(text string) string {
+	if len(text) == 0 || text[len(text)-1] != '\n' {
+		text += "\n"
+	}
+	return text
+}
+
+// Set the document header
+func (self *DocumentBuilder) SetHeader(header string) {
+	self.header = ensureNewlineTerminated(header)
+}
+
+// Set the document footer
+func (self *DocumentBuilder) SetFooter(footer string) {
+    self.footer = ensureNewlineTerminated(footer)
+}
+
 // Add a new line to the document. Adds a newline to the end of the line if none is present.
 func (self *DocumentBuilder) AddLine(line string) {
-	// Insure lines are always newline terminated
-	if len(line) == 0 || line[len(line)-1] != '\n' {
-		line += "\n"
-	}
-
-	self.body += line
+	self.body += ensureNewlineTerminated(line)
 }
 
 // Add an H1 (#) header line to the document.
@@ -62,5 +78,5 @@ func (self *DocumentBuilder) AddRawLink(url string) {
 
 // Build the document into a serialized byte slice.
 func (self *DocumentBuilder) Build() []byte {
-	return []byte(self.body)
+	return []byte(self.header + self.body + self.footer)
 }
