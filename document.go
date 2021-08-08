@@ -1,82 +1,169 @@
 package gemini
 
-// DocumentBuilder allows programatic document creation using the builder pattern.
-// DocumentBuilder supports the use of headers and footers, which combined with the body at build time.
+import (
+	"bytes"
+	"strings"
+
+	"github.com/pkg/errors"
+)
+
+// DocumentBuilder allows programmatic document creation using the builder pattern.
+// DocumentBuilder supports the use of headers and footers, which are combined with the body at build time.
 type DocumentBuilder struct {
-    header string
-	body string
+	header string
+	body   *strings.Builder
 	footer string
 }
 
-// Instantiate a new DocumentBuilder.
+// NewDocumentBuilder creates a DocumentBuilder.
 func NewDocumentBuilder() DocumentBuilder {
-	return DocumentBuilder{}
+    builder := new(strings.Builder)
+	return DocumentBuilder{"", builder, ""}
 }
 
-// Ensures any string passed through this function will be terminated with a newline
-func ensureNewlineTerminated(text string) string {
-	if len(text) == 0 || text[len(text)-1] != '\n' {
-		text += "\n"
+// SetHeader sets a document header. The header is written before the document body during `Build()`.
+func (doc *DocumentBuilder) SetHeader(header string) {
+	doc.header = header
+}
+
+// SetFooter sets a document footer. The footer is written after the document body during `Build()`.
+func (doc *DocumentBuilder) SetFooter(footer string) {
+	doc.footer = footer
+}
+
+// AddLine appends a new line to the document. Adds a newline to the end of the line if none is present.
+func (doc *DocumentBuilder) AddLine(line string) error {
+	_, err := doc.body.WriteString(line)
+	if err != nil {
+		return errors.Wrap(err, "Error writing to document")
 	}
-	return text
+
+	if !strings.HasSuffix(line, "\n") {
+		_, err = doc.body.WriteString("\n")
+		if err != nil {
+			return errors.Wrap(err, "Error writing to document")
+		}
+	}
+
+	return nil
 }
 
-// Set the document header
-func (self *DocumentBuilder) SetHeader(header string) {
-	self.header = ensureNewlineTerminated(header)
+// AddH1Header appends an H1 (#) header line to the document.
+func (doc *DocumentBuilder) AddH1Header(header string) error {
+	_, err := doc.body.WriteString("# ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing to document")
+	}
+
+	doc.AddLine(header)
+	return err
 }
 
-// Set the document footer
-func (self *DocumentBuilder) SetFooter(footer string) {
-    self.footer = ensureNewlineTerminated(footer)
+// AddH2Header appends an H2 (##) header line to the document.
+func (doc *DocumentBuilder) AddH2Header(header string) error {
+	_, err := doc.body.WriteString("## ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing to document")
+	}
+
+	err = doc.AddLine(header)
+	return err
 }
 
-// Add a new line to the document. Adds a newline to the end of the line if none is present.
-func (self *DocumentBuilder) AddLine(line string) {
-	self.body += ensureNewlineTerminated(line)
+// AddH3Header appends an H3 (###) header line to the document.
+func (doc *DocumentBuilder) AddH3Header(header string) error {
+	_, err := doc.body.WriteString("### ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing header line to document")
+	}
+
+	err = doc.AddLine(header)
+	return err
 }
 
-// Add an H1 (#) header line to the document.
-func (self *DocumentBuilder) AddH1Header(header string) {
-	self.AddLine("# " + header)
+// AddQuote appends a quote line to the document.
+func (doc *DocumentBuilder) AddQuote(header string) error {
+	_, err := doc.body.WriteString("> ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing quote to document")
+	}
+
+	err = doc.AddLine(header)
+	return err
 }
 
-// Add an H2 (##) header line to the document.
-func (self *DocumentBuilder) AddH2Header(header string) {
-	self.AddLine("## " + header)
+// AddBullet appends an unordered list item to the document.
+func (doc *DocumentBuilder) AddBullet(header string) error {
+	_, err := doc.body.WriteString("* ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing bullet to document")
+	}
+
+	err = doc.AddLine(header)
+	return err
 }
 
-// Add an H3 (###) header line to the document.
-func (self *DocumentBuilder) AddH3Header(header string) {
-	self.AddLine("### " + header)
+// ToggleFormatting appends a toggle formatting line to the document.
+func (doc *DocumentBuilder) ToggleFormatting() error {
+	return doc.AddLine("```")
 }
 
-// Add a quote line to the document.
-func (self *DocumentBuilder) AddQuote(header string) {
-	self.AddLine("> " + header)
+// AddLink appends an aliased link line to the document.
+func (doc *DocumentBuilder) AddLink(url string, title string) error {
+	_, err := doc.body.WriteString("=> ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing link to document")
+	}
+	_, err = doc.body.WriteString(url)
+	if err != nil {
+		return errors.Wrap(err, "Error writing link to document")
+	}
+	_, err = doc.body.WriteString("\t")
+	if err != nil {
+		return errors.Wrap(err, "Error writing link to document")
+	}
+	// AddLine to ensure there is a newline
+	err = doc.AddLine(title)
+	return err
 }
 
-// Add an unordered list item to the document.
-func (self *DocumentBuilder) AddBullet(header string) {
-	self.AddLine("* " + header)
+// AddRawLink appends a link line to the document.
+func (doc *DocumentBuilder) AddRawLink(url string) error {
+	_, err := doc.body.WriteString("=> ")
+	if err != nil {
+		return errors.Wrap(err, "Error writing raw link to document")
+	}
+	err = doc.AddLine(url)
+	return err
 }
 
-// Add a toggle formatting line to the document.
-func (self *DocumentBuilder) ToggleFormatting() {
-	self.AddLine("```")
-}
+// Build builds the document into a serialized byte slice.
+func (doc *DocumentBuilder) Build() ([]byte, error) {
+	buf := bytes.Buffer{}
 
-// Add an aliased link line to the document.
-func (self *DocumentBuilder) AddLink(url string, title string) {
-	self.AddLine("=> " + url + "\t" + title)
-}
+	// Write header
+	_, err := buf.WriteString(doc.header)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error building document header")
+	}
+	if !strings.HasSuffix(doc.header, "\n") {
+		_, err = buf.WriteString("\n")
+		if err != nil {
+			return nil, errors.Wrap(err, "Error building document header")
+		}
+	}
 
-// Add a link line to the document.
-func (self *DocumentBuilder) AddRawLink(url string) {
-	self.AddLine("=> " + url)
-}
+	// Write body
+	_, err = buf.WriteString(doc.body.String())
+	if err != nil {
+		return nil, errors.Wrap(err, "Error building document body")
+	}
 
-// Build the document into a serialized byte slice.
-func (self *DocumentBuilder) Build() []byte {
-	return []byte(self.header + self.body + self.footer)
+	// Write footer
+	_, err = buf.WriteString(doc.footer)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error building document footer")
+	}
+
+	return buf.Bytes(), nil
 }
