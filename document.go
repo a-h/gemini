@@ -16,9 +16,9 @@ type DocumentBuilder struct {
 }
 
 // NewDocumentBuilder creates a DocumentBuilder.
-func NewDocumentBuilder() DocumentBuilder {
-    builder := new(strings.Builder)
-	return DocumentBuilder{"", builder, ""}
+func NewDocumentBuilder() *DocumentBuilder {
+	builder := new(strings.Builder)
+	return &DocumentBuilder{"", builder, ""}
 }
 
 // SetHeader sets a document header. The header is written before the document body during `Build()`.
