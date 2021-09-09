@@ -35,3 +35,29 @@ func TestDocumentBuilder(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkDocumentBuilder(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		db := NewDocumentBuilder()
+		var err error
+		if err = db.AddH1Header("heading 1"); err != nil {
+			b.Error(err)
+		}
+		if err = db.AddH2Header("heading 2"); err != nil {
+			b.Error(err)
+		}
+		if err = db.AddLine("normal text"); err != nil {
+			b.Error(err)
+		}
+		if err = db.AddQuote("quote"); err != nil {
+			b.Error(err)
+		}
+		result, err := db.Build()
+		if err != nil {
+			b.Error(err)
+		}
+		if len(result) == 0 {
+			b.Error("expected output, but didn't get any")
+		}
+	}
+}

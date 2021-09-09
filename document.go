@@ -146,12 +146,6 @@ func (doc *DocumentBuilder) Build() ([]byte, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "Error building document header")
 	}
-	if !strings.HasSuffix(doc.header, "\n") {
-		_, err = buf.WriteString("\n")
-		if err != nil {
-			return nil, errors.Wrap(err, "Error building document header")
-		}
-	}
 
 	// Write body
 	_, err = buf.WriteString(doc.body.String())
