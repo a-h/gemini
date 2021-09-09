@@ -9,6 +9,18 @@ import (
 	"github.com/pkg/errors"
 )
 
+type DocumentSections []func(dw *DocumentWriter) error
+
+func (s DocumentSections) Write(dw *DocumentWriter) (err error) {
+	for i := 0; i < len(s); i++ {
+		if err = s[i](dw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewDocumentWriter creates a DocumentWriter.
 func NewDocumentWriter(w io.Writer) *DocumentWriter {
 	return &DocumentWriter{
 		w: w,

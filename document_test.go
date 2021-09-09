@@ -94,3 +94,44 @@ func BenchmarkDocumentWriter(b *testing.B) {
 		w.Reset()
 	}
 }
+
+func TestDocumentSections(t *testing.T) {
+	tests := []struct {
+		name     string
+		sections []func(*DocumentWriter) error
+		expected string
+	}{
+		{
+			name: "headers and footers are appended",
+			sections: []func(*DocumentWriter) error{
+				func(dw *DocumentWriter) error {
+					return dw.Header1("header")
+				},
+				func(dw *DocumentWriter) error {
+					return dw.Line("middle")
+				},
+				func(dw *DocumentWriter) error {
+					return dw.Header1("footer")
+				},
+			},
+			expected: `# header
+middle
+# footer
+`,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		ds := DocumentSections(tt.sections)
+		w := new(bytes.Buffer)
+		dw := NewDocumentWriter(w)
+		err := ds.Write(dw)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			continue
+		}
+		if diff := cmp.Diff(tt.expected, w.String()); diff != "" {
+			t.Error(diff)
+		}
+	}
+}
