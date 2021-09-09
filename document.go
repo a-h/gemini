@@ -2,10 +2,76 @@ package gemini
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"strings"
 
 	"github.com/pkg/errors"
 )
+
+func NewDocumentWriter(w io.Writer) *DocumentWriter {
+	return &DocumentWriter{
+		w: w,
+	}
+}
+
+type DocumentWriter struct {
+	w io.Writer
+}
+
+func (dw *DocumentWriter) NewLine() (err error) {
+	_, err = io.WriteString(dw.w, "\n")
+	return fmt.Errorf("error writing newline: %w", err)
+}
+
+func (dw *DocumentWriter) Header1(text string) (err error) {
+	if _, err = io.WriteString(dw.w, "# "); err != nil {
+		return fmt.Errorf("error writing header1: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, text); err != nil {
+		return fmt.Errorf("error writing header1: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, "\n"); err != nil {
+		return fmt.Errorf("error writing header1: %w", err)
+	}
+	return nil
+}
+
+func (dw *DocumentWriter) Header2(text string) (err error) {
+	if _, err = io.WriteString(dw.w, "## "); err != nil {
+		return fmt.Errorf("error writing header2: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, text); err != nil {
+		return fmt.Errorf("error writing header2: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, "\n"); err != nil {
+		return fmt.Errorf("error writing header2: %w", err)
+	}
+	return nil
+}
+
+func (dw *DocumentWriter) Quote(text string) (err error) {
+	if _, err = io.WriteString(dw.w, "> "); err != nil {
+		return fmt.Errorf("error writing quote: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, text); err != nil {
+		return fmt.Errorf("error writing quote: %w", err)
+	}
+	if _, err = io.WriteString(dw.w, "\n"); err != nil {
+		return fmt.Errorf("error writing quote: %w", err)
+	}
+	return nil
+}
+
+func (dw *DocumentWriter) Line(text string) (err error) {
+	if _, err = io.WriteString(dw.w, text); err != nil {
+		return err
+	}
+	if _, err = io.WriteString(dw.w, "\n"); err != nil {
+		return fmt.Errorf("error writing line: %w", err)
+	}
+	return nil
+}
 
 // DocumentBuilder allows programmatic document creation using the builder pattern.
 // DocumentBuilder supports the use of headers and footers, which are combined with the body at build time.
@@ -54,9 +120,7 @@ func (doc *DocumentBuilder) AddH1Header(header string) error {
 	if err != nil {
 		return errors.Wrap(err, "Error writing to document")
 	}
-
-	doc.AddLine(header)
-	return err
+	return doc.AddLine(header)
 }
 
 // AddH2Header appends an H2 (##) header line to the document.
@@ -65,9 +129,7 @@ func (doc *DocumentBuilder) AddH2Header(header string) error {
 	if err != nil {
 		return errors.Wrap(err, "Error writing to document")
 	}
-
-	err = doc.AddLine(header)
-	return err
+	return doc.AddLine(header)
 }
 
 // AddH3Header appends an H3 (###) header line to the document.
@@ -76,9 +138,7 @@ func (doc *DocumentBuilder) AddH3Header(header string) error {
 	if err != nil {
 		return errors.Wrap(err, "Error writing header line to document")
 	}
-
-	err = doc.AddLine(header)
-	return err
+	return doc.AddLine(header)
 }
 
 // AddQuote appends a quote line to the document.
@@ -87,9 +147,7 @@ func (doc *DocumentBuilder) AddQuote(header string) error {
 	if err != nil {
 		return errors.Wrap(err, "Error writing quote to document")
 	}
-
-	err = doc.AddLine(header)
-	return err
+	return doc.AddLine(header)
 }
 
 // AddBullet appends an unordered list item to the document.
@@ -98,9 +156,7 @@ func (doc *DocumentBuilder) AddBullet(header string) error {
 	if err != nil {
 		return errors.Wrap(err, "Error writing bullet to document")
 	}
-
-	err = doc.AddLine(header)
-	return err
+	return doc.AddLine(header)
 }
 
 // ToggleFormatting appends a toggle formatting line to the document.
@@ -123,8 +179,7 @@ func (doc *DocumentBuilder) AddLink(url string, title string) error {
 		return errors.Wrap(err, "Error writing link to document")
 	}
 	// AddLine to ensure there is a newline
-	err = doc.AddLine(title)
-	return err
+	return doc.AddLine(title)
 }
 
 // AddRawLink appends a link line to the document.
