@@ -47,6 +47,18 @@ func TestServer(t *testing.T) {
 			expectedBodyErr:   nil,
 		},
 		{
+			name:    "domain lookups are not case sensitive",
+			request: "gemini://SENSIBLE\r\n",
+			handler: func(w ResponseWriter, r *Request) {
+				w.SetHeader(CodeInput, "What's your name?")
+			},
+			expectedCode:      CodeInput,
+			expectedMeta:      "What's your name?",
+			expectedHeaderErr: nil,
+			expectedBody:      []byte{},
+			expectedBodyErr:   nil,
+		},
+		{
 			name:    "successful handlers are sent",
 			request: "gemini://sensible\r\n",
 			handler: func(w ResponseWriter, r *Request) {
@@ -182,12 +194,12 @@ func TestServer(t *testing.T) {
 			rec := NewRecorder([]byte(tt.request))
 			// Skip the usual setup, because this test doesn't carry out integration work.
 			dh := &DomainHandler{
-				ServerName: "",
+				ServerName: "sensible",
 				Handler:    HandlerFunc(tt.handler),
 			}
 			s := &Server{
 				DomainToHandler: map[string]*DomainHandler{
-					"": dh,
+					"sensible": dh,
 				},
 				Context: context.Background(),
 			}

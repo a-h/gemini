@@ -141,3 +141,66 @@ Configure allowed server certificates for trust-on-first-use certificate support
 ```
 client.AddAlllowedCertificateForHost("a.gemini", "3082016c3081f3020900d4c7c9907518eb61300a06082a8648ce3d0403023020310b30090603550406130267623111300f06035504030c08612e67656d696e69301e170d3230303832303139303330335a170d3330303831383139303330335a3020310b30090603550406130267623111300f06035504030c08612e67656d696e693076301006072a8648ce3d020106052b8104002203620004ae5cabe01f708d8f9423725df49601e1a033a1b51eb73cd3a8a9853011346127cbfedb57c4bd14ad6000ccb2f748d32b2a2b817b1860781d937e7666680874876fb4a9a91c44e2cf8c9804d40f6e7122f6c92a1884b62bd9f0749cca4e12cfa8300a06082a8648ce3d0403020368003065023100ae447eb9455e9ca1f02f013390d2c4029a7f29732cf6e29787b53b6435904d622f47f3b1fbffe60a284dbd4cddd6ef580230518dcb0355d5c3d880357128972c630ca90a915f1eb417a7ea0e4518a72dfc8a76c9b50c51d56f6a6835c4dfa989b72be3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 ```
+
+## Tasks
+
+### test
+
+Test the project.
+
+```sh
+go test ./... -short
+```
+
+### test-integration
+
+Integration test the project.
+
+```sh
+go test ./...
+```
+
+### build
+
+Build the CLI.
+
+```sh
+go build -o gemini ./cmd/main.go
+```
+
+### build-docker
+
+Build the Docker image.
+
+```sh
+docker build . -t adrianhesketh/gemini
+```
+
+### build-snapshot
+
+Build a snapshot release using goreleaser.
+
+```sh
+goreleaser build --snapshot --rm-dist
+```
+
+### serve-local-tests
+
+Run a local Gemini server.
+
+```sh
+echo add '127.0.0.1       a-h.gemini' to your /etc/hosts file
+openssl ecparam -genkey -name secp384r1 -out server.key
+openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650 -subj "/C=/ST=/L=/O=/OU=/CN=a-h.gemini"
+go run ./cmd/main.go serve --domain=a-h.gemini --certFile=server.crt --keyFile=server.key --path=./tests
+```
+
+### release
+
+Push a release to Github.
+
+```
+if [ "${GITHUB_TOKEN}" == "" ]; then echo "Set the GITHUB_TOKEN environment variable"; fi
+./push-tag.sh
+goreleaser --rm-dist
+```

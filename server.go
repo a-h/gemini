@@ -95,6 +95,9 @@ func IsErrorCode(code Code) bool {
 // addr is in the form "<optional_ip>:<port>", e.g. ":1965". If left empty, it will default to ":1965".
 // domainToHandler is a map of the server name (domain) to the certificate key pair and the Gemini handler used to serve content.
 func NewServer(ctx context.Context, addr string, domainToHandler map[string]*DomainHandler) *Server {
+	for k, v := range domainToHandler {
+		domainToHandler[strings.ToLower(k)] = v
+	}
 	return &Server{
 		Context:         ctx,
 		Addr:            addr,
@@ -181,7 +184,7 @@ func (srv *Server) serveTLS(l net.Listener) (err error) {
 		ClientAuth:         tls.RequestClientCert,
 		InsecureSkipVerify: true,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			dh, ok := srv.DomainToHandler[hello.ServerName]
+			dh, ok := srv.DomainToHandler[strings.ToLower(hello.ServerName)]
 			if !ok {
 				return nil, fmt.Errorf("gemini: certificate not found for %q", hello.ServerName)
 			}
@@ -231,7 +234,7 @@ func (srv *Server) handleTLS(conn *tls.Conn) {
 		}
 	}
 	serverName := conn.ConnectionState().ServerName
-	dh, ok := srv.DomainToHandler[serverName]
+	dh, ok := srv.DomainToHandler[strings.ToLower(serverName)]
 	if !ok {
 		log.Warn("gemini: failed to find domain handler", log.String("serverName", serverName))
 	}

@@ -193,7 +193,7 @@ func serve(args []string) {
 	dh := gemini.NewDomainHandler(*domainFlag, cert, h)
 	ctx := context.Background()
 	domainToHandler := map[string]*gemini.DomainHandler{
-		*domainFlag: dh,
+		strings.ToLower(*domainFlag): dh,
 	}
 	server := gemini.NewServer(ctx, fmt.Sprintf(":%d", *portFlag), domainToHandler)
 	server.ReadTimeout = *readTimeoutFlag

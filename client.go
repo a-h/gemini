@@ -152,6 +152,7 @@ func (client *Client) AddClientCertificate(prefix string, cert tls.Certificate) 
 
 // AddServerCertificate allows the client to connect to a domain based on its hash.
 func (client *Client) AddServerCertificate(host, certificateHash string) {
+	host = strings.ToLower(host)
 	if m := client.domainToAllowedCertificateHash[host]; m == nil {
 		client.domainToAllowedCertificateHash[host] = make(map[string]interface{})
 	}
@@ -220,7 +221,7 @@ func (client *Client) RequestURL(ctx context.Context, u *url.URL) (resp *Respons
 		return
 	}
 	conn := cn.(*tls.Conn)
-	allowedHashesForDomain := client.domainToAllowedCertificateHash[u.Host]
+	allowedHashesForDomain := client.domainToAllowedCertificateHash[strings.ToLower(u.Host)]
 	ok = false
 	for _, cert := range conn.ConnectionState().PeerCertificates {
 		hash := base64.StdEncoding.EncodeToString(sha256.New().Sum(cert.Raw))
