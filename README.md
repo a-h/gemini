@@ -199,7 +199,7 @@ go run ./cmd/main.go serve --domain=a-h.gemini --certFile=server.crt --keyFile=s
 
 Push a release to Github.
 
-```
+```sh
 if [ "${GITHUB_TOKEN}" == "" ]; then echo "Set the GITHUB_TOKEN environment variable"; fi
 ./push-tag.sh
 goreleaser --rm-dist
