@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/a-h/gemini"
 )
 
@@ -162,42 +164,147 @@ func request(args []string) {
 	}
 }
 
+func newServerConfig() serverConfig {
+	return serverConfig{
+		Domain:       make(map[string]domainConfig),
+		Port:         1965,
+		ReadTimeout:  time.Second * 5,
+		WriteTimeout: time.Second * 10,
+	}
+}
+
+type serverConfig struct {
+	Domain       map[string]domainConfig
+	Port         int
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
+
+type domainConfig struct {
+	Path         string
+	CertFilePath string
+	KeyFilePath  string
+}
+
+func (dc domainConfig) IsValid(name string) error {
+	var errs []error
+	if dc.Path == "" {
+		errs = append(errs, fmt.Errorf("%s: no path configured", name))
+	}
+	if dc.CertFilePath == "" {
+		errs = append(errs, fmt.Errorf("%s: no cert file configured", name))
+	}
+	if dc.KeyFilePath == "" {
+		errs = append(errs, fmt.Errorf("%s: no key file configured", name))
+	}
+	return errors.Join(errs...)
+}
+
+var errNoDomainsConfigured = errors.New("no domains configured")
+
+func (sc serverConfig) IsValid() error {
+	var errs []error
+	if len(sc.Domain) == 0 {
+		return errNoDomainsConfigured
+	}
+	for name, dc := range sc.Domain {
+		errs = append(errs, dc.IsValid(name))
+	}
+	return errors.Join(errs...)
+}
+
+func loadConfigFile(conf io.Reader) (serverConfig serverConfig, err error) {
+	_, err = toml.NewDecoder(conf).Decode(&serverConfig)
+	if err != nil {
+		return
+	}
+	if serverConfig.Port == 0 {
+		serverConfig.Port = defaultPort
+	}
+	if serverConfig.ReadTimeout == 0 {
+		serverConfig.ReadTimeout = defaultReadTimeout
+	}
+	if serverConfig.WriteTimeout == 0 {
+		serverConfig.WriteTimeout = defaultWriteTimeout
+	}
+	return serverConfig, serverConfig.IsValid()
+}
+
+var (
+	defaultReadTimeout  = time.Second * 5
+	defaultWriteTimeout = time.Second * 10
+	defaultPort         = 1965
+	defaultPath         = "."
+)
+
 func serve(args []string) {
+	// Parse flags.
 	cmd := flag.NewFlagSet("serve", flag.ExitOnError)
 	certFileFlag := cmd.String("certFile", "", "(required) Path to a server certificate file (must also set keyFile if this is used).")
 	keyFileFlag := cmd.String("keyFile", "", "(required) Path to a server key file (must also set certFile if this is used).")
 	domainFlag := cmd.String("domain", "localhost", "The domain to listen on.")
-	pathFlag := cmd.String("path", ".", "Path containing content.")
-	portFlag := cmd.Int("port", 1965, "Address to listen on.")
-	readTimeoutFlag := cmd.Duration("readTimeout", time.Second*5, "Set the duration, e.g. 1m or 5s.")
-	writeTimeoutFlag := cmd.Duration("writeTimeout", time.Second*10, "Set the duration, e.g. 1m or 5s.")
+	pathFlag := cmd.String("path", defaultPath, "Path containing content.")
+	portFlag := cmd.Int("port", defaultPort, "Address to listen on.")
+	readTimeoutFlag := cmd.Duration("readTimeout", defaultReadTimeout, "Set the duration, e.g. 1m or 5s.")
+	writeTimeoutFlag := cmd.Duration("writeTimeout", defaultWriteTimeout, "Set the duration, e.g. 1m or 5s.")
+	configPathFlag := cmd.String("config", "", "Path to a TOML config file.")
 	helpFlag := cmd.Bool("help", false, "Print help and exit.")
+
+	// Print defaults.
 	err := cmd.Parse(args)
 	if err != nil || *helpFlag {
 		cmd.PrintDefaults()
 		return
 	}
-	if *certFileFlag == "" || *keyFileFlag == "" {
-		fmt.Println("error: require certFile and keyFile flags to create server")
-		fmt.Println()
-		cmd.PrintDefaults()
-		os.Exit(1)
-	}
-	h := gemini.FileSystemHandler(gemini.Dir(*pathFlag))
 
-	cert, err := tls.LoadX509KeyPair(*certFileFlag, *keyFileFlag)
-	if err != nil {
-		fmt.Printf("error: failed to load certificates: %v\n", err)
-		os.Exit(1)
+	// Load config.
+	serverConfig := newServerConfig()
+	if *configPathFlag != "" {
+		r, err := os.Open(*configPathFlag)
+		if err != nil {
+			fmt.Printf("error: invalid config path: %v\n", err)
+			os.Exit(1)
+		}
+		serverConfig, err = loadConfigFile(r)
+		if err != nil {
+			fmt.Printf("error: invalid config: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if *certFileFlag == "" || *keyFileFlag == "" {
+			fmt.Println("error: require certFile and keyFile flags to create server")
+			fmt.Println()
+			cmd.PrintDefaults()
+			os.Exit(1)
+		}
+		serverConfig.Port = *portFlag
+		serverConfig.ReadTimeout = *readTimeoutFlag
+		serverConfig.WriteTimeout = *writeTimeoutFlag
+		serverConfig.Domain[*domainFlag] = domainConfig{
+			Path:         *pathFlag,
+			CertFilePath: *certFileFlag,
+			KeyFilePath:  *keyFileFlag,
+		}
 	}
-	dh := gemini.NewDomainHandler(*domainFlag, cert, h)
+
+	// Create handlers.
+	domainToHandler := make(map[string]*gemini.DomainHandler)
+	for domain, config := range serverConfig.Domain {
+		h := gemini.FileSystemHandler(gemini.Dir(config.Path))
+		cert, err := tls.LoadX509KeyPair(config.CertFilePath, config.KeyFilePath)
+		if err != nil {
+			fmt.Printf("error: failed to load certificates for domain %q: %v\n", domain, err)
+			os.Exit(1)
+		}
+		dh := gemini.NewDomainHandler(domain, cert, h)
+		domainToHandler[strings.ToLower(domain)] = dh
+	}
+
+	// Start server.
 	ctx := context.Background()
-	domainToHandler := map[string]*gemini.DomainHandler{
-		strings.ToLower(*domainFlag): dh,
-	}
-	server := gemini.NewServer(ctx, fmt.Sprintf(":%d", *portFlag), domainToHandler)
-	server.ReadTimeout = *readTimeoutFlag
-	server.WriteTimeout = *writeTimeoutFlag
+	server := gemini.NewServer(ctx, fmt.Sprintf(":%d", serverConfig.Port), domainToHandler)
+	server.ReadTimeout = serverConfig.ReadTimeout
+	server.WriteTimeout = serverConfig.WriteTimeout
 	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Printf("error: %v\n", err)
