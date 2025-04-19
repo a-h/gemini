@@ -224,7 +224,8 @@ func (client *Client) RequestURL(ctx context.Context, u *url.URL) (resp *Respons
 	allowedHashesForDomain := client.domainToAllowedCertificateHash[strings.ToLower(u.Host)]
 	ok = false
 	for _, cert := range conn.ConnectionState().PeerCertificates {
-		hash := base64.StdEncoding.EncodeToString(sha256.New().Sum(cert.Raw))
+		certHash := sha256.Sum256(cert.Raw)
+		hash := base64.StdEncoding.EncodeToString(certHash[:])
 		certificates = append(certificates, hash)
 		if _, ok = allowedHashesForDomain[hash]; ok {
 			break
